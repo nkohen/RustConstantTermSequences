@@ -1,5 +1,9 @@
 use crate::laurent_poly::LaurentPoly;
 use crate::mod_int::ModInt;
+use graphviz_rust::cmd::{CommandArg, Format};
+use graphviz_rust::dot_structures::Graph;
+use graphviz_rust::printer::PrinterContext;
+use graphviz_rust::{exec, parse};
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -100,5 +104,67 @@ impl DFAO<ModInt, LaurentPoly> {
             str.push('\n');
         }
         str
+    }
+
+    pub fn to_graphviz(&self) -> String {
+        let p = self.states.get(0).unwrap().modulus;
+        let mut str = String::from("digraph G {\nrankdir = LR;\nnode [shape = point ]; qi\n");
+        let mut index_map: HashMap<LaurentPoly, usize> = HashMap::new();
+
+        for i in 0..self.states.len() {
+            let state = self.states.get(i).unwrap();
+            index_map.insert(state.clone(), i);
+            let shape = if self.states[i].constant_term() == ModInt::zero(p) {
+                "circle"
+            } else {
+                "doublecircle"
+            };
+            str.push_str(&format!(
+                "node [shape = {shape}, label=\"{state}\", fontsize=12]{i};\n"
+            ));
+        }
+
+        str.push_str("qi -> 0;\n");
+
+        for i in 0..self.states.len() {
+            let state = self.states.get(i).unwrap();
+            let mut transitions_map: HashMap<usize, Vec<String>> = HashMap::new();
+            for j in 0..p {
+                let to_state = self
+                    .transitions
+                    .get(&(state.clone(), ModInt::new(j, p)))
+                    .unwrap();
+                let to_index = index_map.get(to_state).unwrap();
+                if transitions_map.contains_key(to_index) {
+                    transitions_map
+                        .get_mut(to_index)
+                        .unwrap()
+                        .push(j.to_string());
+                } else {
+                    transitions_map.insert(to_index.clone(), vec![j.to_string()]);
+                }
+            }
+            for to_index in transitions_map.keys() {
+                str.push_str(&format!(
+                    "{i} -> {to_index} [label = \"{}\"];\n",
+                    transitions_map.get(to_index).unwrap().join(", ")
+                ));
+            }
+        }
+
+        str.push('}');
+        str
+    }
+
+    pub fn save_png(&self, filename: &str) -> () {
+        let g: Graph = parse(&self.to_graphviz()).unwrap();
+        let _ = exec(
+            g,
+            &mut PrinterContext::default(),
+            vec![
+                Format::Png.into(),
+                CommandArg::Output("./target/graph.png".to_string()),
+            ],
+        );
     }
 }

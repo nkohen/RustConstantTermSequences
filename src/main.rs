@@ -1,7 +1,7 @@
+mod dfao;
 mod laurent_poly;
 mod mod_int;
 mod sequences;
-mod dfao;
 
 use crate::dfao::DFAO;
 use crate::laurent_poly::LaurentPoly;
@@ -15,11 +15,11 @@ fn main() {
         let mot_i = tri_pow.constant_term() - tri_pow.get_coefficient(&2);
         print!("{mot_i}, ");
     }
-    
+
     let trinomial_pow = trinomial.pow(&9);
     let reduced = trinomial_pow.lambda_reduce();
     println!("\n{trinomial_pow} reduces to {reduced}");
-    
+
     let one_minus_square: LaurentPoly = LaurentPoly::from_string("1-x^2", p);
     for i in 0..=20 {
         let fast_value = constant_term(&trinomial, &one_minus_square, &i);
@@ -29,10 +29,13 @@ fn main() {
         }
     }
     println!("DONE!");
-    
+
     let dfao = DFAO::poly_auto(&trinomial, &one_minus_square);
     for i in 0..=20 {
         print!("{}, ", dfao.compute_ct(i));
     }
     println!("\n{}", dfao.serialize());
+    println!("{}", dfao.to_graphviz());
+
+    dfao.save_png("./target/graph.png");
 }
