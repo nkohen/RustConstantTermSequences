@@ -1,10 +1,13 @@
 mod dfao;
 mod laurent_poly;
 mod mod_int;
+mod mod_int_matrix;
 mod sequences;
+mod lin_rep;
 
 use crate::dfao::DFAO;
 use crate::laurent_poly::LaurentPoly;
+use crate::lin_rep::LinRep;
 use crate::sequences::{constant_term, constant_term_slow};
 
 fn main() {
@@ -38,4 +41,11 @@ fn main() {
     println!("{}", dfao.to_graphviz());
 
     dfao.save_png("./target/graph.png");
+    
+    println!("{}\n", LaurentPoly::from_string("x^2 + 1 + x^-3", 5).degree());
+    
+    let lin_rep = LinRep::for_ct_sequence(trinomial, one_minus_square);
+    for i in 0..lin_rep.rank {
+        println!("{}\n\n", lin_rep.mat_func[i])
+    }
 }

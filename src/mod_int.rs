@@ -7,11 +7,13 @@ pub struct ModInt {
 }
 
 impl ModInt {
-    
     pub fn new(value: u64, modulus: u64) -> ModInt {
-        ModInt { value: value % modulus, modulus }
+        ModInt {
+            value: value % modulus,
+            modulus,
+        }
     }
-    
+
     pub fn from_i64(value: i64, modulus: u64) -> Self {
         let mut val = value % (modulus as i64);
         if val < 0 {
@@ -22,7 +24,7 @@ impl ModInt {
             modulus,
         }
     }
-    
+
     pub fn zero(modulus: u64) -> Self {
         ModInt::new(0, modulus)
     }

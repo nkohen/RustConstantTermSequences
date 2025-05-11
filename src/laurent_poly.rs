@@ -1,3 +1,4 @@
+use crate::dfao::ConstantTerm;
 use crate::mod_int::ModInt;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -5,18 +6,14 @@ use std::fmt;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LaurentPoly {
     terms: BTreeMap<i64, ModInt>, // exponent -> coefficient
-    pub modulus: u64
+    pub modulus: u64,
 }
 
 impl LaurentPoly {
-    
     pub fn new(terms: BTreeMap<i64, ModInt>, modulus: u64) -> LaurentPoly {
-        LaurentPoly {
-            terms,
-            modulus
-        }
+        LaurentPoly { terms, modulus }
     }
-    
+
     pub fn zero(modulus: u64) -> Self {
         LaurentPoly::new(BTreeMap::new(), modulus)
     }
@@ -167,6 +164,14 @@ impl LaurentPoly {
             .collect();
         LaurentPoly::new(new_terms, self.modulus)
     }
+
+    pub fn degree(&self) -> u64 {
+        self.terms
+            .keys()
+            .max_by_key(|e| e.abs())
+            .unwrap()
+            .unsigned_abs()
+    }
 }
 
 impl fmt::Display for LaurentPoly {
@@ -200,5 +205,15 @@ impl fmt::Display for LaurentPoly {
         }
 
         write!(f, "{}", parts.join(" + ").replace("+ -", "- "))
+    }
+}
+
+impl ConstantTerm for LaurentPoly {
+    fn constant_term(&self) -> ModInt {
+        self.constant_term()
+    }
+
+    fn modulus(&self) -> u64 {
+        self.modulus
     }
 }

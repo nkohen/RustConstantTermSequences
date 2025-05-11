@@ -5,11 +5,17 @@ use graphviz_rust::dot_structures::Graph;
 use graphviz_rust::printer::PrinterContext;
 use graphviz_rust::{exec, parse};
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::hash::Hash;
 
 pub struct DFAO<A: Eq + Hash, S: Clone + Eq + Hash> {
     pub states: Vec<S>, // states[0] is the initial state
     pub transitions: HashMap<(S, A), S>,
+}
+
+pub trait ConstantTerm {
+    fn constant_term(&self) -> ModInt;
+    fn modulus(&self) -> u64;
 }
 
 impl<A: Eq + Hash, S: Clone + Eq + Hash> DFAO<A, S> {
@@ -64,9 +70,11 @@ impl DFAO<ModInt, LaurentPoly> {
             transitions,
         }
     }
+}
 
+impl<S: ConstantTerm + Clone + Eq + Hash> DFAO<ModInt, S> {
     pub fn compute_ct(&self, n: u64) -> ModInt {
-        let p = self.states.get(0).unwrap().modulus;
+        let p = self.states.get(0).unwrap().modulus();
         let mut n = n;
         let mut digits: Vec<ModInt> = Vec::new();
         while n > 0 {
@@ -75,7 +83,7 @@ impl DFAO<ModInt, LaurentPoly> {
             n = (n - r) / p;
         }
 
-        fn output_func(poly: LaurentPoly) -> ModInt {
+        fn output_func<S: ConstantTerm>(poly: S) -> ModInt {
             poly.constant_term()
         }
 
@@ -83,7 +91,7 @@ impl DFAO<ModInt, LaurentPoly> {
     }
 
     pub fn serialize(&self) -> String {
-        let p = self.states.get(0).unwrap().modulus;
+        let p = self.states.get(0).unwrap().modulus();
         let mut str = String::from(format!("lsd_{p}\n\n"));
         for k in 0..self.states.len() {
             let current_state = self.states.get(k).unwrap();
@@ -105,11 +113,13 @@ impl DFAO<ModInt, LaurentPoly> {
         }
         str
     }
+}
 
+impl<S: ConstantTerm + Clone + Eq + Hash + Display> DFAO<ModInt, S> {
     pub fn to_graphviz(&self) -> String {
-        let p = self.states.get(0).unwrap().modulus;
+        let p = self.states.get(0).unwrap().modulus();
         let mut str = String::from("digraph G {\nrankdir = LR;\nnode [shape = point ]; qi\n");
-        let mut index_map: HashMap<LaurentPoly, usize> = HashMap::new();
+        let mut index_map: HashMap<S, usize> = HashMap::new();
 
         for i in 0..self.states.len() {
             let state = self.states.get(i).unwrap();
@@ -161,10 +171,7 @@ impl DFAO<ModInt, LaurentPoly> {
         let _ = exec(
             g,
             &mut PrinterContext::default(),
-            vec![
-                Format::Png.into(),
-                CommandArg::Output("./target/graph.png".to_string()),
-            ],
+            vec![Format::Png.into(), CommandArg::Output(filename.to_string())],
         );
     }
 }
