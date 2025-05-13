@@ -48,6 +48,17 @@ impl ModInt {
         // Fermat's little theorem (modulus must be prime)
         self.pow(self.modulus - 2)
     }
+
+    pub fn get_digits(n: u64, base: u64) -> Vec<ModInt> {
+        let mut n = n;
+        let mut digits: Vec<ModInt> = Vec::new();
+        while n > 0 {
+            let r = n % base;
+            digits.push(ModInt::new(r, base));
+            n = (n - r) / base;
+        }
+        digits
+    }
 }
 
 use std::ops::{Add, Div, Mul, Sub};

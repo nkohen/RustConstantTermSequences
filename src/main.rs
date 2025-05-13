@@ -11,6 +11,7 @@ use crate::laurent_poly::LaurentPoly;
 use crate::lin_rep::LinRep;
 use crate::sequences::{constant_term, constant_term_slow};
 
+// TODO: Write tests and benchmarks
 fn main() {
     let p = 5;
     let trinomial: LaurentPoly = LaurentPoly::from_string("x + 1 + x^-1", p);
@@ -56,7 +57,30 @@ fn main() {
         print!("{}, ", lin_rep.compute(i));
     }
 
-    let lin_rep_dfao = DFAO::lin_rep_to_machine(&trinomial, &one_minus_square);
+    let lin_rep_dfao = DFAO::lin_rep_machine(&trinomial, &one_minus_square);
 
     assert_eq!(dfao.serialize(), lin_rep_dfao.serialize());
+
+    println!();
+    for i in 0..=20 {
+        print!("{}, ", lin_rep_dfao.compute_ct(i));
+    }
+
+    let lin_rep_reverse_dfao = DFAO::lin_rep_reverse_machine(&trinomial, &one_minus_square);
+
+    println!();
+    for i in 0..=20 {
+        print!(
+            "{}, ",
+            lin_rep_reverse_dfao.compute_ct_reverse(i, &one_minus_square)
+        );
+    }
+
+    println!();
+    for i in 0..=20 {
+        print!(
+            "{}, ",
+            lin_rep_reverse_dfao.compute_ct_reverse(i, &LaurentPoly::one(p))
+        );
+    }
 }

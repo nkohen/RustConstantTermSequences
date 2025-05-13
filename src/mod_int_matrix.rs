@@ -78,6 +78,7 @@ impl ModIntMatrix {
     }
 
     pub fn left_mul(&self, col_vec: &ModIntVector) -> ModIntVector {
+        assert!(!col_vec.is_row);
         assert_eq!(self.dim, col_vec.dim);
         assert_eq!(self.modulus, col_vec.modulus);
         let mut entries = vec![ModInt::zero(self.modulus); self.dim];
@@ -87,10 +88,11 @@ impl ModIntMatrix {
             }
         }
 
-        ModIntVector::new(entries)
+        ModIntVector::new_col(entries)
     }
 
     pub fn right_mul(&self, row_vec: &ModIntVector) -> ModIntVector {
+        assert!(row_vec.is_row);
         assert_eq!(self.dim, row_vec.dim);
         assert_eq!(self.modulus, row_vec.modulus);
         let mut entries = vec![ModInt::zero(self.modulus); self.dim];
@@ -100,7 +102,7 @@ impl ModIntMatrix {
             }
         }
 
-        ModIntVector::new(entries)
+        ModIntVector::new_row(entries)
     }
 }
 

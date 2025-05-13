@@ -34,7 +34,7 @@ impl LinRep {
         let max_deg = std::cmp::max(P.degree() - 1, Q.degree()) as usize;
         let mut poly = LaurentPoly::one(modulus);
         let mut mats: Vec<ModIntMatrix> = vec![];
-        for k in 0..modulus {
+        for _ in 0..modulus {
             mats.push(Self::compute_mat_for_poly(&poly, max_deg));
             poly = poly.mul(P);
         }
@@ -42,15 +42,10 @@ impl LinRep {
         let mut col_vec = vec![ModInt::zero(modulus); 2 * max_deg + 1];
         col_vec[max_deg] = ModInt::new(1, modulus);
 
-        let mut row_vec = vec![ModInt::zero(modulus); 2 * max_deg + 1];
-        for k in 0..(2 * max_deg + 1) {
-            row_vec[k] = Q.get_coefficient(&(k as i64 - max_deg as i64));
-        }
-
         LinRep {
-            row_vec: ModIntVector::new(row_vec),
+            row_vec: ModIntVector::from_poly(Q, 2 * max_deg + 1),
             mat_func: mats,
-            col_vec: ModIntVector::new(col_vec),
+            col_vec: ModIntVector::new_col(col_vec),
             rank: 2 * max_deg + 1,
             modulus,
         }

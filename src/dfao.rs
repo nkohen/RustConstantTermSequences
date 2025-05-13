@@ -75,8 +75,7 @@ impl DFAO<ModInt, LaurentPoly> {
 }
 
 impl DFAO<ModInt, ModIntVector> {
-    // TODO: Fix this function, then make its reverse version, then make constructions which terminate on property
-    pub fn lin_rep_to_machine(P: &LaurentPoly, Q: &LaurentPoly) -> Self {
+    pub fn lin_rep_machine(P: &LaurentPoly, Q: &LaurentPoly) -> Self {
         assert_eq!(P.modulus, Q.modulus);
         let p = P.modulus;
         let lin_rep = LinRep::for_ct_sequence(P, Q);
@@ -114,18 +113,70 @@ impl DFAO<ModInt, ModIntVector> {
             transitions,
         }
     }
+
+    // TODO: make constructions which terminate on property (Requires looking into functional stuff in Rust)
+    pub fn lin_rep_reverse_machine(P: &LaurentPoly, Q: &LaurentPoly) -> Self {
+        assert_eq!(P.modulus, Q.modulus);
+        let p = P.modulus;
+        let lin_rep = LinRep::for_ct_sequence(P, Q);
+        let mut states: Vec<ModIntVector> = Vec::new();
+        states.push(lin_rep.col_vec);
+        let mut k = 0;
+        let mut transitions = HashMap::new();
+
+        while k < states.len() {
+            let current_state = states.get(k).unwrap().clone();
+            for i in 0..p {
+                let new_state = lin_rep.mat_func[i as usize].left_mul(&current_state);
+                let mut new_state_index = states.len();
+                for j in 0..states.len() {
+                    if states.get(j).unwrap() == &new_state {
+                        new_state_index = j;
+                        break;
+                    }
+                }
+
+                if new_state_index == states.len() {
+                    states.push(new_state);
+                }
+
+                transitions.insert(
+                    (current_state.clone(), ModInt::new(i, p)),
+                    states.get(new_state_index).unwrap().clone(),
+                );
+            }
+            k += 1;
+        }
+
+        DFAO {
+            states,
+            transitions,
+        }
+    }
+
+    pub fn compute_ct_reverse(&self, n: u64, Q: &LaurentPoly) -> ModInt {
+        let mut state = self.states.get(0).unwrap().clone();
+        assert!(state.dim as u64 >= 2 * Q.degree() + 1);
+
+        let p = self.states.first().unwrap().modulus;
+        let mut digits = ModInt::get_digits(n, p);
+        digits.reverse();
+
+        for digit in digits {
+            state = self
+                .transitions
+                .get(&(state.clone(), digit))
+                .unwrap()
+                .clone();
+        }
+        state.dot(&ModIntVector::from_poly(Q, state.dim))
+    }
 }
 
 impl<S: ConstantTerm + Clone + Eq + Hash> DFAO<ModInt, S> {
     pub fn compute_ct(&self, n: u64) -> ModInt {
-        let p = self.states.get(0).unwrap().modulus();
-        let mut n = n;
-        let mut digits: Vec<ModInt> = Vec::new();
-        while n > 0 {
-            let r = n % p;
-            digits.push(ModInt::new(r, p));
-            n = (n - r) / p;
-        }
+        let p = self.states.first().unwrap().modulus();
+        let digits = ModInt::get_digits(n, p);
 
         fn output_func<S: ConstantTerm>(poly: S) -> ModInt {
             poly.constant_term()
