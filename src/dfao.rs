@@ -1,5 +1,7 @@
 use crate::laurent_poly::LaurentPoly;
+use crate::lin_rep::LinRep;
 use crate::mod_int::ModInt;
+use crate::mod_int_vector::ModIntVector;
 use graphviz_rust::cmd::{CommandArg, Format};
 use graphviz_rust::dot_structures::Graph;
 use graphviz_rust::printer::PrinterContext;
@@ -45,6 +47,48 @@ impl DFAO<ModInt, LaurentPoly> {
             let current_state = states.get(k).unwrap().clone();
             for i in 0..p {
                 let new_state = P.pow(&i).mul(&current_state).lambda_reduce();
+                let mut new_state_index = states.len();
+                for j in 0..states.len() {
+                    if states.get(j).unwrap() == &new_state {
+                        new_state_index = j;
+                        break;
+                    }
+                }
+
+                if new_state_index == states.len() {
+                    states.push(new_state);
+                }
+
+                transitions.insert(
+                    (current_state.clone(), ModInt::new(i, p)),
+                    states.get(new_state_index).unwrap().clone(),
+                );
+            }
+            k += 1;
+        }
+
+        DFAO {
+            states,
+            transitions,
+        }
+    }
+}
+
+impl DFAO<ModInt, ModIntVector> {
+    // TODO: Fix this function, then make its reverse version, then make constructions which terminate on property
+    pub fn lin_rep_to_machine(P: &LaurentPoly, Q: &LaurentPoly) -> Self {
+        assert_eq!(P.modulus, Q.modulus);
+        let p = P.modulus;
+        let lin_rep = LinRep::for_ct_sequence(P, Q);
+        let mut states: Vec<ModIntVector> = Vec::new();
+        states.push(lin_rep.row_vec);
+        let mut k = 0;
+        let mut transitions = HashMap::new();
+
+        while k < states.len() {
+            let current_state = states.get(k).unwrap().clone();
+            for i in 0..p {
+                let new_state = lin_rep.mat_func[i as usize].right_mul(&current_state);
                 let mut new_state_index = states.len();
                 for j in 0..states.len() {
                     if states.get(j).unwrap() == &new_state {
