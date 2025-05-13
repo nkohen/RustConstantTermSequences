@@ -96,7 +96,7 @@ impl ModIntMatrix {
         let mut entries = vec![ModInt::zero(self.modulus); self.dim];
         for j in 0..self.dim {
             for i in 0..self.dim {
-                entries[j] = entries[j] + (row_vec.entries[j] * self.entries[i][j]);
+                entries[j] = entries[j] + (row_vec.entries[i] * self.entries[i][j]);
             }
         }
 
