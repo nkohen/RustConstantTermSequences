@@ -21,16 +21,73 @@ pub trait ConstantTerm {
 }
 
 impl<A: Eq + Hash, S: Clone + Eq + Hash> DFAO<A, S> {
-    pub fn compute<O>(&self, input: Vec<A>, output_func: &dyn Fn(S) -> O) -> O {
-        let mut state = self.states.get(0).unwrap().clone();
+    pub fn compute_from_vec<F, O>(&self, input: Vec<A>, output_func: F) -> O
+    where
+        F: FnOnce(&S) -> O,
+    {
+        let mut state = self.states.get(0).unwrap();
         for character in input {
-            state = self
-                .transitions
-                .get(&(state.clone(), character))
-                .unwrap()
-                .clone();
+            state = self.transitions.get(&(state.clone(), character)).unwrap();
         }
         output_func(state)
+    }
+}
+
+impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
+    pub fn from_reduction_rules<F>(initial_state: &S, modulus: u64, reduction_rule: F) -> Self
+    where
+        F: Fn(&S, ModInt) -> S,
+    {
+        let mut states: Vec<S> = Vec::new();
+        states.push(initial_state.clone());
+        let mut k = 0;
+        let mut transitions = HashMap::new();
+
+        while k < states.len() {
+            let current_state = states.get(k).unwrap().clone();
+            for i in 0..modulus {
+                let new_state = reduction_rule(&current_state, ModInt::new(i, modulus));
+                let mut new_state_index = states.len();
+                for j in 0..states.len() {
+                    if states.get(j).unwrap() == &new_state {
+                        new_state_index = j;
+                        break;
+                    }
+                }
+
+                if new_state_index == states.len() {
+                    states.push(new_state);
+                }
+
+                transitions.insert(
+                    (current_state.clone(), ModInt::new(i, modulus)),
+                    states.get(new_state_index).unwrap().clone(),
+                );
+            }
+            k += 1;
+        }
+
+        DFAO {
+            states,
+            transitions,
+        }
+    }
+
+    pub fn compute_lsd<F, O>(&self, n: u64, modulus: u64, output_func: F) -> O
+    where
+        F: Fn(&S) -> O,
+    {
+        let digits = ModInt::get_digits(n, modulus);
+        self.compute_from_vec(digits, output_func)
+    }
+
+    pub fn compute_msd<F, O>(&self, n: u64, modulus: u64, output_func: F) -> O
+    where
+        F: Fn(&S) -> O,
+    {
+        let mut digits = ModInt::get_digits(n, modulus);
+        digits.reverse();
+        self.compute_from_vec(digits, output_func)
     }
 }
 
@@ -38,80 +95,19 @@ impl DFAO<ModInt, LaurentPoly> {
     pub fn poly_auto(P: &LaurentPoly, Q: &LaurentPoly) -> Self {
         assert_eq!(P.modulus, Q.modulus);
         let p = P.modulus;
-        let mut states: Vec<LaurentPoly> = Vec::new();
-        states.push(Q.clone());
-        let mut k = 0;
-        let mut transitions = HashMap::new();
-
-        while k < states.len() {
-            let current_state = states.get(k).unwrap().clone();
-            for i in 0..p {
-                let new_state = P.pow(&i).mul(&current_state).lambda_reduce();
-                let mut new_state_index = states.len();
-                for j in 0..states.len() {
-                    if states.get(j).unwrap() == &new_state {
-                        new_state_index = j;
-                        break;
-                    }
-                }
-
-                if new_state_index == states.len() {
-                    states.push(new_state);
-                }
-
-                transitions.insert(
-                    (current_state.clone(), ModInt::new(i, p)),
-                    states.get(new_state_index).unwrap().clone(),
-                );
-            }
-            k += 1;
-        }
-
-        DFAO {
-            states,
-            transitions,
-        }
+        DFAO::from_reduction_rules(&Q, p, |state, i| P.pow(&i.value).mul(state).lambda_reduce())
     }
 }
 
 impl DFAO<ModInt, ModIntVector> {
     pub fn lin_rep_machine(P: &LaurentPoly, Q: &LaurentPoly) -> Self {
+        let lin_rep = LinRep::for_ct_sequence(P, Q);
         assert_eq!(P.modulus, Q.modulus);
         let p = P.modulus;
-        let lin_rep = LinRep::for_ct_sequence(P, Q);
-        let mut states: Vec<ModIntVector> = Vec::new();
-        states.push(lin_rep.row_vec);
-        let mut k = 0;
-        let mut transitions = HashMap::new();
 
-        while k < states.len() {
-            let current_state = states.get(k).unwrap().clone();
-            for i in 0..p {
-                let new_state = lin_rep.mat_func[i as usize].right_mul(&current_state);
-                let mut new_state_index = states.len();
-                for j in 0..states.len() {
-                    if states.get(j).unwrap() == &new_state {
-                        new_state_index = j;
-                        break;
-                    }
-                }
-
-                if new_state_index == states.len() {
-                    states.push(new_state);
-                }
-
-                transitions.insert(
-                    (current_state.clone(), ModInt::new(i, p)),
-                    states.get(new_state_index).unwrap().clone(),
-                );
-            }
-            k += 1;
-        }
-
-        DFAO {
-            states,
-            transitions,
-        }
+        DFAO::from_reduction_rules(&lin_rep.row_vec, p, |state, i| {
+            lin_rep.mat_func[i.value as usize].right_mul(&state)
+        })
     }
 
     // TODO: make constructions which terminate on property (Requires looking into functional stuff in Rust)
@@ -119,70 +115,25 @@ impl DFAO<ModInt, ModIntVector> {
         assert_eq!(P.modulus, Q.modulus);
         let p = P.modulus;
         let lin_rep = LinRep::for_ct_sequence(P, Q);
-        let mut states: Vec<ModIntVector> = Vec::new();
-        states.push(lin_rep.col_vec);
-        let mut k = 0;
-        let mut transitions = HashMap::new();
 
-        while k < states.len() {
-            let current_state = states.get(k).unwrap().clone();
-            for i in 0..p {
-                let new_state = lin_rep.mat_func[i as usize].left_mul(&current_state);
-                let mut new_state_index = states.len();
-                for j in 0..states.len() {
-                    if states.get(j).unwrap() == &new_state {
-                        new_state_index = j;
-                        break;
-                    }
-                }
-
-                if new_state_index == states.len() {
-                    states.push(new_state);
-                }
-
-                transitions.insert(
-                    (current_state.clone(), ModInt::new(i, p)),
-                    states.get(new_state_index).unwrap().clone(),
-                );
-            }
-            k += 1;
-        }
-
-        DFAO {
-            states,
-            transitions,
-        }
+        DFAO::from_reduction_rules(&lin_rep.col_vec, p, |state, i| {
+            lin_rep.mat_func[i.value as usize].left_mul(&state)
+        })
     }
 
     pub fn compute_ct_reverse(&self, n: u64, Q: &LaurentPoly) -> ModInt {
-        let mut state = self.states.get(0).unwrap().clone();
-        assert!(state.dim as u64 >= 2 * Q.degree() + 1);
-
         let p = self.states.first().unwrap().modulus;
-        let mut digits = ModInt::get_digits(n, p);
-        digits.reverse();
 
-        for digit in digits {
-            state = self
-                .transitions
-                .get(&(state.clone(), digit))
-                .unwrap()
-                .clone();
-        }
-        state.dot(&ModIntVector::from_poly(Q, state.dim))
+        DFAO::compute_msd(&self, n, p, |state| {
+            state.dot(&ModIntVector::from_poly(Q, state.dim))
+        })
     }
 }
 
 impl<S: ConstantTerm + Clone + Eq + Hash> DFAO<ModInt, S> {
     pub fn compute_ct(&self, n: u64) -> ModInt {
         let p = self.states.first().unwrap().modulus();
-        let digits = ModInt::get_digits(n, p);
-
-        fn output_func<S: ConstantTerm>(poly: S) -> ModInt {
-            poly.constant_term()
-        }
-
-        self.compute(digits, &output_func)
+        DFAO::compute_lsd(&self, n, p, |poly| poly.constant_term())
     }
 
     pub fn serialize(&self) -> String {
