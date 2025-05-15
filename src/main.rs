@@ -14,6 +14,7 @@ use crate::sequences::{constant_term, constant_term_slow};
 // TODO: Write tests and benchmarks
 fn main() {
     let p = 5;
+    let state_bound = 100000;
     let trinomial: LaurentPoly = LaurentPoly::from_string("x + 1 + x^-1", p);
     for i in 0..=20 {
         let tri_pow = trinomial.pow(&i);
@@ -35,7 +36,7 @@ fn main() {
     }
     println!("DONE!");
 
-    let dfao = DFAO::poly_auto(&trinomial, &one_minus_square);
+    let dfao = DFAO::poly_auto(&trinomial, &one_minus_square, state_bound).unwrap();
     for i in 0..=20 {
         print!("{}, ", dfao.compute_ct(i));
     }
@@ -57,7 +58,7 @@ fn main() {
         print!("{}, ", lin_rep.compute(i));
     }
 
-    let lin_rep_dfao = DFAO::lin_rep_machine(&trinomial, &one_minus_square);
+    let lin_rep_dfao = DFAO::lin_rep_machine(&trinomial, &one_minus_square, state_bound).unwrap();
 
     assert_eq!(
         dfao.serialize(p, |poly| poly.constant_term()),
@@ -69,7 +70,8 @@ fn main() {
         print!("{}, ", lin_rep_dfao.compute_ct(i));
     }
 
-    let lin_rep_reverse_dfao = DFAO::lin_rep_reverse_machine(&trinomial, &one_minus_square);
+    let lin_rep_reverse_dfao =
+        DFAO::lin_rep_reverse_machine(&trinomial, &one_minus_square, state_bound).unwrap();
 
     println!();
     for i in 0..=20 {
@@ -86,4 +88,59 @@ fn main() {
             lin_rep_reverse_dfao.compute_ct_reverse(i, &LaurentPoly::one(p))
         );
     }
+
+    assert_eq!(
+        DFAO::compute_shortest_zero(&trinomial, &LaurentPoly::one(p), state_bound).unwrap(),
+        None
+    );
+    println!(
+        "\n\n{}",
+        DFAO::compute_shortest_zero(
+            &LaurentPoly::from_string("x + 1 + x^-1", 3),
+            &LaurentPoly::one(3),
+            state_bound
+        )
+        .unwrap()
+        .unwrap()
+    );
+    println!(
+        "{}",
+        DFAO::compute_shortest_zero(
+            &LaurentPoly::from_string("x + 1 + x^-2", 5),
+            &LaurentPoly::one(5),
+            state_bound
+        )
+        .unwrap()
+        .unwrap()
+    );
+    println!(
+        "{}",
+        DFAO::compute_shortest_zero(
+            &LaurentPoly::from_string("x + 1 + x^-7", 5),
+            &LaurentPoly::one(5),
+            state_bound
+        )
+        .unwrap()
+        .unwrap()
+    );
+    println!(
+        "{}",
+        DFAO::compute_shortest_zero(
+            &LaurentPoly::from_string("x + 1 + x^-48", 5),
+            &LaurentPoly::one(5),
+            state_bound
+        )
+        .unwrap()
+        .unwrap()
+    );
+
+    assert_eq!(
+        DFAO::compute_shortest_zero(
+            &LaurentPoly::from_string("x + 1 + x^-1001", 2),
+            &LaurentPoly::one(2),
+            state_bound
+        )
+            .unwrap(),
+        None
+    );
 }
