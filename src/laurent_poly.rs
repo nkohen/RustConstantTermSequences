@@ -1,4 +1,3 @@
-use crate::dfao::ConstantTerm;
 use crate::mod_int::ModInt;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -205,15 +204,5 @@ impl fmt::Display for LaurentPoly {
         }
 
         write!(f, "{}", parts.join(" + ").replace("+ -", "- "))
-    }
-}
-
-impl ConstantTerm for LaurentPoly {
-    fn constant_term(&self) -> ModInt {
-        self.constant_term()
-    }
-
-    fn modulus(&self) -> u64 {
-        self.modulus
     }
 }

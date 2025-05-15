@@ -15,11 +15,6 @@ pub struct DFAO<A: Eq + Hash, S: Clone + Eq + Hash> {
     pub transitions: HashMap<(S, A), S>,
 }
 
-pub trait ConstantTerm {
-    fn constant_term(&self) -> ModInt;
-    fn modulus(&self) -> u64;
-}
-
 impl<A: Eq + Hash, S: Clone + Eq + Hash> DFAO<A, S> {
     pub fn compute_from_vec<F, O>(&self, input: Vec<A>, output_func: F) -> O
     where
@@ -97,6 +92,11 @@ impl DFAO<ModInt, LaurentPoly> {
         let p = P.modulus;
         DFAO::from_reduction_rules(&Q, p, |state, i| P.pow(&i.value).mul(state).lambda_reduce())
     }
+
+    pub fn compute_ct(&self, n: u64) -> ModInt {
+        let p = self.states.first().unwrap().modulus;
+        DFAO::compute_lsd(&self, n, p, |poly| poly.constant_term())
+    }
 }
 
 impl DFAO<ModInt, ModIntVector> {
@@ -121,6 +121,11 @@ impl DFAO<ModInt, ModIntVector> {
         })
     }
 
+    pub fn compute_ct(&self, n: u64) -> ModInt {
+        let p = self.states.first().unwrap().modulus;
+        DFAO::compute_lsd(&self, n, p, |poly| poly.constant_term())
+    }
+
     pub fn compute_ct_reverse(&self, n: u64, Q: &LaurentPoly) -> ModInt {
         let p = self.states.first().unwrap().modulus;
 
@@ -130,18 +135,15 @@ impl DFAO<ModInt, ModIntVector> {
     }
 }
 
-impl<S: ConstantTerm + Clone + Eq + Hash> DFAO<ModInt, S> {
-    pub fn compute_ct(&self, n: u64) -> ModInt {
-        let p = self.states.first().unwrap().modulus();
-        DFAO::compute_lsd(&self, n, p, |poly| poly.constant_term())
-    }
-
-    pub fn serialize(&self) -> String {
-        let p = self.states.get(0).unwrap().modulus();
+impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
+    pub fn serialize<F>(&self, p: u64, output_func: F) -> String
+    where
+        F: Fn(&S) -> ModInt,
+    {
         let mut str = String::from(format!("lsd_{p}\n\n"));
         for k in 0..self.states.len() {
             let current_state = self.states.get(k).unwrap();
-            str.push_str(&format!("{k} {}\n", current_state.constant_term()));
+            str.push_str(&format!("{k} {}\n", output_func(&current_state)));
             for i in 0..p {
                 let index = ModInt::new(i, p);
                 let to_state = self
@@ -161,22 +163,16 @@ impl<S: ConstantTerm + Clone + Eq + Hash> DFAO<ModInt, S> {
     }
 }
 
-impl<S: ConstantTerm + Clone + Eq + Hash + Display> DFAO<ModInt, S> {
-    pub fn to_graphviz(&self) -> String {
-        let p = self.states.get(0).unwrap().modulus();
+impl<S: Clone + Eq + Hash + Display> DFAO<ModInt, S> {
+    pub fn to_graphviz(&self, p: u64) -> String {
         let mut str = String::from("digraph G {\nrankdir = LR;\nnode [shape = point ]; qi\n");
         let mut index_map: HashMap<S, usize> = HashMap::new();
 
         for i in 0..self.states.len() {
             let state = self.states.get(i).unwrap();
             index_map.insert(state.clone(), i);
-            let shape = if self.states[i].constant_term() == ModInt::zero(p) {
-                "circle"
-            } else {
-                "doublecircle"
-            };
             str.push_str(&format!(
-                "node [shape = {shape}, label=\"{state}\", fontsize=12]{i};\n"
+                "node [shape = circle, label=\"{state}\", fontsize=12]{i};\n"
             ));
         }
 
@@ -212,8 +208,8 @@ impl<S: ConstantTerm + Clone + Eq + Hash + Display> DFAO<ModInt, S> {
         str
     }
 
-    pub fn save_png(&self, filename: &str) -> () {
-        let g: Graph = parse(&self.to_graphviz()).unwrap();
+    pub fn save_png(&self, p: u64, filename: &str) -> () {
+        let g: Graph = parse(&self.to_graphviz(p)).unwrap();
         let _ = exec(
             g,
             &mut PrinterContext::default(),

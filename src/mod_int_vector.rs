@@ -1,4 +1,3 @@
-use crate::dfao::ConstantTerm;
 use crate::laurent_poly::LaurentPoly;
 use crate::mod_int::ModInt;
 
@@ -65,14 +64,8 @@ impl ModIntVector {
         }
         sum
     }
-}
 
-impl ConstantTerm for ModIntVector {
-    fn constant_term(&self) -> ModInt {
+    pub fn constant_term(&self) -> ModInt {
         self.entries[self.max_deg()]
-    }
-
-    fn modulus(&self) -> u64 {
-        self.modulus
     }
 }

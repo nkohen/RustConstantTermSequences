@@ -39,10 +39,10 @@ fn main() {
     for i in 0..=20 {
         print!("{}, ", dfao.compute_ct(i));
     }
-    println!("\n{}", dfao.serialize());
-    println!("{}", dfao.to_graphviz());
+    println!("\n{}", dfao.serialize(p, |poly| poly.constant_term()));
+    println!("{}", dfao.to_graphviz(p));
 
-    dfao.save_png("./target/graph.png");
+    dfao.save_png(p, "./target/graph.png");
 
     println!(
         "{}\n",
@@ -59,7 +59,10 @@ fn main() {
 
     let lin_rep_dfao = DFAO::lin_rep_machine(&trinomial, &one_minus_square);
 
-    assert_eq!(dfao.serialize(), lin_rep_dfao.serialize());
+    assert_eq!(
+        dfao.serialize(p, |poly| poly.constant_term()),
+        lin_rep_dfao.serialize(p, |vec| vec.constant_term())
+    );
 
     println!();
     for i in 0..=20 {
