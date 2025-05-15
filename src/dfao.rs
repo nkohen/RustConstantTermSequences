@@ -2,6 +2,7 @@ use crate::laurent_poly::LaurentPoly;
 use crate::lin_rep::LinRep;
 use crate::mod_int::ModInt;
 use crate::mod_int_vector::ModIntVector;
+use either::{Either, Left, Right};
 use graphviz_rust::cmd::{CommandArg, Format};
 use graphviz_rust::dot_structures::Graph;
 use graphviz_rust::printer::PrinterContext;
@@ -16,7 +17,7 @@ pub struct DFAO<A: Eq + Hash, S: Clone + Eq + Hash> {
 }
 
 impl<A: Eq + Hash, S: Clone + Eq + Hash> DFAO<A, S> {
-    pub fn compute_from_vec<F, O>(&self, input: Vec<A>, output_func: F) -> O
+    pub fn evaluate<F, O>(&self, input: Vec<A>, output_func: F) -> O
     where
         F: FnOnce(&S) -> O,
     {
@@ -29,43 +30,75 @@ impl<A: Eq + Hash, S: Clone + Eq + Hash> DFAO<A, S> {
 }
 
 impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
-    pub fn from_reduction_rules<F>(initial_state: &S, modulus: u64, reduction_rule: F) -> Self
+    pub fn from_reduction_rules_until_prop<F1, F2>(
+        initial_state: &S,
+        modulus: u64,
+        reduction_rule: F1,
+        stop_prop: F2,
+    ) -> Either<Self, Vec<u64>>
     where
-        F: Fn(&S, ModInt) -> S,
+        F1: Fn(&S, ModInt) -> S,
+        F2: Fn(&S) -> bool,
     {
-        let mut states: Vec<S> = Vec::new();
-        states.push(initial_state.clone());
+        if stop_prop(initial_state) {
+            return Right(vec![]);
+        }
+
+        let mut states_with_paths: Vec<(S, Vec<u64>)> = Vec::new();
+        states_with_paths.push((initial_state.clone(), vec![]));
         let mut k = 0;
         let mut transitions = HashMap::new();
 
-        while k < states.len() {
-            let current_state = states.get(k).unwrap().clone();
+        while k < states_with_paths.len() {
+            let (current_state, path) = states_with_paths.get(k).unwrap().clone();
             for i in 0..modulus {
                 let new_state = reduction_rule(&current_state, ModInt::new(i, modulus));
-                let mut new_state_index = states.len();
-                for j in 0..states.len() {
-                    if states.get(j).unwrap() == &new_state {
+                let mut new_state_index = states_with_paths.len();
+                for j in 0..states_with_paths.len() {
+                    let (state_j, _) = states_with_paths.get(j).unwrap();
+                    if state_j == &new_state {
                         new_state_index = j;
                         break;
                     }
                 }
 
-                if new_state_index == states.len() {
-                    states.push(new_state);
+                if new_state_index == states_with_paths.len() {
+                    let mut new_path = path.clone();
+                    new_path.push(i);
+
+                    if stop_prop(&new_state) {
+                        return Right(new_path);
+                    }
+                    states_with_paths.push((new_state, new_path));
                 }
 
                 transitions.insert(
                     (current_state.clone(), ModInt::new(i, modulus)),
-                    states.get(new_state_index).unwrap().clone(),
+                    match states_with_paths.get(new_state_index).unwrap() {
+                        (state, _) => state.clone(),
+                    },
                 );
             }
             k += 1;
         }
 
-        DFAO {
+        let states = states_with_paths
+            .iter()
+            .map(|(state, _)| state.clone())
+            .collect();
+
+        Left(DFAO {
             states,
             transitions,
-        }
+        })
+    }
+
+    pub fn from_reduction_rules<F>(initial_state: &S, modulus: u64, reduction_rule: F) -> Self
+    where
+        F: Fn(&S, ModInt) -> S,
+    {
+        Self::from_reduction_rules_until_prop(initial_state, modulus, reduction_rule, |_| false)
+            .unwrap_left()
     }
 
     pub fn compute_lsd<F, O>(&self, n: u64, modulus: u64, output_func: F) -> O
@@ -73,7 +106,7 @@ impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
         F: Fn(&S) -> O,
     {
         let digits = ModInt::get_digits(n, modulus);
-        self.compute_from_vec(digits, output_func)
+        self.evaluate(digits, output_func)
     }
 
     pub fn compute_msd<F, O>(&self, n: u64, modulus: u64, output_func: F) -> O
@@ -82,7 +115,7 @@ impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
     {
         let mut digits = ModInt::get_digits(n, modulus);
         digits.reverse();
-        self.compute_from_vec(digits, output_func)
+        self.evaluate(digits, output_func)
     }
 }
 
@@ -91,6 +124,20 @@ impl DFAO<ModInt, LaurentPoly> {
         assert_eq!(P.modulus, Q.modulus);
         let p = P.modulus;
         DFAO::from_reduction_rules(&Q, p, |state, i| P.pow(&i.value).mul(state).lambda_reduce())
+    }
+
+    pub fn poly_auto_fail_on_zero(P: &LaurentPoly, Q: &LaurentPoly) -> Option<Self> {
+        assert_eq!(P.modulus, Q.modulus);
+        let p = P.modulus;
+        match Self::from_reduction_rules_until_prop(
+            &Q,
+            p,
+            |state, i| P.pow(&i.value).mul(state).lambda_reduce(),
+            |state| state.constant_term() == ModInt::zero(p),
+        ) {
+            Left(machine) => Some(machine),
+            Right(_) => None,
+        }
     }
 
     pub fn compute_ct(&self, n: u64) -> ModInt {
@@ -110,7 +157,6 @@ impl DFAO<ModInt, ModIntVector> {
         })
     }
 
-    // TODO: make constructions which terminate on property (Requires looking into functional stuff in Rust)
     pub fn lin_rep_reverse_machine(P: &LaurentPoly, Q: &LaurentPoly) -> Self {
         assert_eq!(P.modulus, Q.modulus);
         let p = P.modulus;
@@ -129,9 +175,48 @@ impl DFAO<ModInt, ModIntVector> {
     pub fn compute_ct_reverse(&self, n: u64, Q: &LaurentPoly) -> ModInt {
         let p = self.states.first().unwrap().modulus;
 
-        DFAO::compute_msd(&self, n, p, |state| {
+        self.compute_msd(n, p, |state| {
             state.dot(&ModIntVector::from_poly(Q, state.dim))
         })
+    }
+
+    pub fn compute_shortest_prop<F>(P: &LaurentPoly, Q: &LaurentPoly, prop: F) -> Option<u64>
+    where
+        F: Fn(&ModIntVector) -> bool,
+    {
+        assert_eq!(P.modulus, Q.modulus);
+        let p = P.modulus;
+        let lin_rep = LinRep::for_ct_sequence(P, Q);
+        match DFAO::from_reduction_rules_until_prop(
+            &lin_rep.col_vec,
+            p,
+            |state, i| lin_rep.mat_func[i.value as usize].left_mul(&state),
+            prop,
+        ) {
+            Left(_) => None,
+            Right(digits) => {
+                let mut result = 0;
+                for digit in digits {
+                    result *= p;
+                    result += digit;
+                }
+                Some(result)
+            }
+        }
+    }
+
+    pub fn compute_shortest_ct_prop<F>(P: &LaurentPoly, Q: &LaurentPoly, prop: F) -> Option<u64>
+    where
+        F: Fn(&ModInt) -> bool,
+    {
+        Self::compute_shortest_prop(P, Q, |vec| {
+            prop(&vec.dot(&ModIntVector::from_poly(Q, vec.dim)))
+        })
+    }
+
+    // TODO: Test this
+    pub fn compute_shortest_zero(P: &LaurentPoly, Q: &LaurentPoly) -> Option<u64> {
+        Self::compute_shortest_ct_prop(P, Q, |value| value == &ModInt::zero(P.modulus))
     }
 }
 
