@@ -282,6 +282,14 @@ impl DFAO<ModInt, ModIntVector> {
 
         Self::compute_shortest_ct_prop(P, Q, |value| value == &ModInt::zero(P.modulus), state_bound)
     }
+
+    pub fn compute_shortest_non_zero(
+        P: &LaurentPoly,
+        Q: &LaurentPoly,
+        state_bound: usize,
+    ) -> Result<Option<u64>, String> {
+        Self::compute_shortest_ct_prop(P, Q, |value| value != &ModInt::zero(P.modulus), state_bound)
+    }
 }
 
 impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {

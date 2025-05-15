@@ -140,7 +140,7 @@ fn main() {
             &LaurentPoly::one(2),
             state_bound
         )
-            .unwrap(),
+        .unwrap(),
         None
     );
 }
