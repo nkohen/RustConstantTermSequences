@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::Hash;
 
+#[derive(Debug)]
 pub struct DFAO<A: Eq + Hash, S: Clone + Eq + Hash> {
     pub states: Vec<S>, // states[0] is the initial state
     pub transitions: HashMap<(S, A), S>,
@@ -168,7 +169,7 @@ impl DFAO<ModInt, LaurentPoly> {
 
     pub fn compute_ct(&self, n: u64) -> ModInt {
         let p = self.states.first().unwrap().modulus;
-        DFAO::compute_lsd(&self, n, p, |poly| poly.constant_term())
+        self.compute_lsd(n, p, |poly| poly.constant_term())
     }
 }
 
@@ -209,7 +210,7 @@ impl DFAO<ModInt, ModIntVector> {
 
     pub fn compute_ct(&self, n: u64) -> ModInt {
         let p = self.states.first().unwrap().modulus;
-        DFAO::compute_lsd(&self, n, p, |poly| poly.constant_term())
+        self.compute_lsd(n, p, |poly| poly.constant_term())
     }
 
     pub fn compute_ct_reverse(&self, n: u64, Q: &LaurentPoly) -> ModInt {
@@ -371,6 +372,163 @@ impl<S: Clone + Eq + Hash + Display> DFAO<ModInt, S> {
             g,
             &mut PrinterContext::default(),
             vec![Format::Png.into(), CommandArg::Output(filename.to_string())],
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_poly_auto() {
+        let primes = vec![2, 3, 5, 7, 11, 13];
+        let mots: Vec<u64> = vec![
+            1, 1, 2, 4, 9, 21, 51, 127, 323, 835, 2188, 5798, 15511, 41835, 113634, 310572, 853467,
+            2356779, 6536382, 18199284, 50852019, 142547559, 400763223, 1129760415, 3192727797,
+        ];
+
+        for p in primes {
+            let P = LaurentPoly::from_string("x + 1 + x^-1", p);
+            let Q = LaurentPoly::from_string("1 - x^2", p);
+            let dfao = DFAO::poly_auto(&P, &Q, 10000).unwrap();
+            for n in 0..mots.len() as u64 {
+                assert_eq!(dfao.compute_ct(n), ModInt::new(mots[n as usize], p));
+            }
+        }
+
+        let P = LaurentPoly::from_string("x + 1 + x^-1", 11);
+        let Q = LaurentPoly::from_string("1 - x^2", 11);
+        let dfao = DFAO::poly_auto(&P, &Q, 15);
+        assert_eq!(dfao.unwrap_err(), "Number of states exceeded 15.");
+    }
+
+    #[test]
+    fn test_poly_auto_fail_on_zero() {
+        let primes = vec![2, 3, 5, 7, 11, 13, 17, 19, 23, 29];
+        let no_zero_primes = vec![2, 5, 11, 13, 23, 29];
+
+        for p in primes {
+            let P = LaurentPoly::from_string("x + 1 + x^-1", p);
+            let Q = LaurentPoly::one(p);
+            let dfao_opt = DFAO::poly_auto_fail_on_zero(&P, &Q, 10000).unwrap();
+
+            if no_zero_primes.contains(&p) {
+                let dfao = dfao_opt.unwrap();
+                for n in 0..25 {
+                    assert_eq!(dfao.compute_ct(n), P.pow(&n).constant_term());
+                }
+            } else {
+                assert!(dfao_opt.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn test_lin_rep_machine() {
+        let primes = vec![2, 3, 5, 7, 11, 13];
+        let mots: Vec<u64> = vec![
+            1, 1, 2, 4, 9, 21, 51, 127, 323, 835, 2188, 5798, 15511, 41835, 113634, 310572, 853467,
+            2356779, 6536382, 18199284, 50852019, 142547559, 400763223, 1129760415, 3192727797,
+        ];
+
+        for p in primes {
+            let P = LaurentPoly::from_string("x + 1 + x^-1", p);
+            let Q = LaurentPoly::from_string("1 - x^2", p);
+            let dfao = DFAO::lin_rep_machine(&P, &Q, 10000).unwrap();
+            for n in 0..mots.len() as u64 {
+                assert_eq!(dfao.compute_ct(n), ModInt::new(mots[n as usize], p));
+            }
+
+            let dfao_poly_auto = DFAO::poly_auto(&P, &Q, 10000).unwrap();
+            assert_eq!(
+                dfao.serialize(p, |state| state.constant_term()),
+                dfao_poly_auto.serialize(p, |state| state.constant_term())
+            );
+        }
+
+        let P = LaurentPoly::from_string("x + 1 + x^-1", 11);
+        let Q = LaurentPoly::from_string("1 - x^2", 11);
+        let dfao = DFAO::lin_rep_machine(&P, &Q, 15);
+        assert_eq!(dfao.unwrap_err(), "Number of states exceeded 15.");
+    }
+
+    #[test]
+    fn test_lin_rep_reverse_machine() {
+        let primes = vec![2, 3, 5, 7, 11, 13];
+        let mots: Vec<u64> = vec![
+            1, 1, 2, 4, 9, 21, 51, 127, 323, 835, 2188, 5798, 15511, 41835, 113634, 310572, 853467,
+            2356779, 6536382, 18199284, 50852019, 142547559, 400763223, 1129760415, 3192727797,
+        ];
+
+        for p in primes {
+            let P = LaurentPoly::from_string("x + 1 + x^-1", p);
+            let Q = LaurentPoly::from_string("1 - x^2", p);
+            let dfao = DFAO::lin_rep_reverse_machine(&P, &Q, 10000).unwrap();
+            for n in 0..mots.len() as u64 {
+                assert_eq!(
+                    dfao.compute_ct_reverse(n, &Q),
+                    ModInt::new(mots[n as usize], p)
+                );
+            }
+        }
+
+        let P = LaurentPoly::from_string("x + 1 + x^-1", 11);
+        let Q = LaurentPoly::from_string("1 - x^2", 11);
+        let dfao = DFAO::lin_rep_reverse_machine(&P, &Q, 279);
+        assert_eq!(dfao.unwrap_err(), "Number of states exceeded 279.");
+    }
+
+    #[test]
+    fn test_compute_shortest_zero() {
+        assert_eq!(
+            DFAO::compute_shortest_zero(
+                &LaurentPoly::from_string("x + 1 + x^-1", 3),
+                &LaurentPoly::one(3),
+                10000
+            )
+            .unwrap()
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            DFAO::compute_shortest_zero(
+                &LaurentPoly::from_string("x + 1 + x^-2", 5),
+                &LaurentPoly::one(5),
+                10000
+            )
+            .unwrap()
+            .unwrap(),
+            39
+        );
+        assert_eq!(
+            DFAO::compute_shortest_zero(
+                &LaurentPoly::from_string("x + 1 + x^-7", 5),
+                &LaurentPoly::one(5),
+                10000
+            )
+            .unwrap()
+            .unwrap(),
+            14
+        );
+        assert_eq!(
+            DFAO::compute_shortest_zero(
+                &LaurentPoly::from_string("x + 1 + x^-48", 5),
+                &LaurentPoly::one(5),
+                10000
+            )
+            .unwrap()
+            .unwrap(),
+            49
+        );
+        assert_eq!(
+            DFAO::compute_shortest_zero(
+                &LaurentPoly::from_string("x + 1 + x^-1001", 2),
+                &LaurentPoly::one(2),
+                10000
+            )
+            .unwrap(),
+            None
         );
     }
 }
