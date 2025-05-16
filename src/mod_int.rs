@@ -178,7 +178,13 @@ mod tests {
     }
 
     #[test]
-    fn test_mult() {
+    #[should_panic]
+    fn test_add_panic() {
+        let _ = ModInt::new(1, 5) + ModInt::new(2, 7);
+    }
+
+    #[test]
+    fn test_mul() {
         for i in 0..100 {
             for j in 0..100 {
                 for m in 1..100 {
@@ -186,6 +192,12 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_mul_panic() {
+        let _ = ModInt::new(1, 5) * ModInt::new(2, 7);
     }
 
     #[test]
@@ -202,5 +214,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_div_panic() {
+        let _ = ModInt::new(1, 5) / ModInt::new(2, 7);
     }
 }
