@@ -99,3 +99,108 @@ impl fmt::Display for ModInt {
         write!(f, "{}", self.value)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new() {
+        assert_eq!(ModInt::new(42, 10).value, 2);
+        assert_eq!(ModInt::new(11, 5), ModInt::new(1, 5));
+        assert_ne!(ModInt::new(0, 2), ModInt::new(0, 3));
+    }
+
+    #[test]
+    fn test_from_i64() {
+        assert_eq!(ModInt::from_i64(-23, 10), ModInt::from_i64(7, 10));
+        assert_eq!(ModInt::from_i64(11, 5), ModInt::from_i64(1, 5));
+        assert_ne!(ModInt::from_i64(0, 2), ModInt::from_i64(0, 3));
+    }
+
+    #[test]
+    fn test_zero() {
+        assert_eq!(ModInt::zero(42).value, 0);
+        assert_eq!(ModInt::zero(11), ModInt::zero(11));
+        assert_ne!(ModInt::zero(11), ModInt::zero(12));
+    }
+
+    #[test]
+    fn test_pow() {
+        for n in 1..10 {
+            for k in 2..5 {
+                for i in 0..10 {
+                    assert_eq!(ModInt::new(k, n).pow(i as u64), ModInt::new(k.pow(i), n))
+                }
+            }
+        }
+
+        assert_eq!(ModInt::new(23, 42).pow(2300), ModInt::new(25, 42));
+    }
+
+    #[test]
+    fn test_inv() {
+        let primes = vec![2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
+        for p in primes {
+            for n in 1..p {
+                let num = ModInt::new(n, p);
+                assert_eq!(num * num.inv(), ModInt::new(1, p));
+            }
+        }
+
+        assert_eq!(ModInt::new(87, 101).inv(), ModInt::new(36, 101));
+    }
+
+    #[test]
+    fn test_get_digits() {
+        let digits: Vec<ModInt> = vec![4, 7, 1, 1, 2, 2]
+            .iter()
+            .map(|n: &u64| ModInt::new(n.clone(), 8))
+            .collect();
+        assert_eq!(ModInt::get_digits(74364, 8), digits);
+
+        let digits: Vec<ModInt> = vec![2, 2, 4, 0, 4, 0, 4, 0, 2]
+            .iter()
+            .map(|n: &u64| ModInt::new(n.clone(), 5))
+            .collect();
+        assert_eq!(ModInt::get_digits(846362, 5), digits);
+    }
+
+    #[test]
+    fn test_add() {
+        for i in 0..100 {
+            for j in 0..100 {
+                for m in 1..100 {
+                    assert_eq!(ModInt::new(i, m) + ModInt::new(j, m), ModInt::new(i + j, m));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mult() {
+        for i in 0..100 {
+            for j in 0..100 {
+                for m in 1..100 {
+                    assert_eq!(ModInt::new(i, m) * ModInt::new(j, m), ModInt::new(i * j, m));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_div() {
+        let primes = vec![2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
+
+        for p in primes {
+            for i in 0..100 {
+                for j in 1..p {
+                    assert_eq!(
+                        (ModInt::new(i, p) / ModInt::new(j, p)) * ModInt::new(j, p),
+                        ModInt::new(i, p)
+                    );
+                }
+            }
+        }
+    }
+}
