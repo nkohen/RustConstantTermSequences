@@ -352,7 +352,7 @@ impl DFAO<ModInt, ModIntVector> {
             let flag = Arc::clone(&cancel_flag);
             thread::spawn(move || {
                 loop {
-                    thread::sleep(Duration::from_secs(2));
+                    thread::sleep(Duration::from_millis(100));
                     if flag.load(std::sync::atomic::Ordering::Relaxed) {
                         let _ = tx.send(Err("Process was cancelled".to_string()));
                         break;
@@ -486,7 +486,7 @@ impl DFAO<ModInt, ModIntVector> {
             let flag = Arc::clone(&cancel_flag);
             thread::spawn(move || {
                loop {
-                   thread::sleep(Duration::from_secs(2));
+                   thread::sleep(Duration::from_millis(100));
                    if flag.load(std::sync::atomic::Ordering::Relaxed) {
                        let _ = tx.send(Err("Process was cancelled".to_string()));
                        break;
