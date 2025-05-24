@@ -330,69 +330,84 @@ impl DFAO<ModInt, ModIntVector> {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let prop = Arc::new(prop);
-        let flag1 = Arc::clone(&cancel_flag);
-        let flag2 = Arc::clone(&cancel_flag);
-        let prop1 = Arc::clone(&prop);
-        let prop2 = Arc::clone(&prop);
-        let P0 = P.clone();
-        let Q0 = Q.clone();
-        let P1 = P.clone();
-        let Q1 = Q.clone();
-        let P2 = P.clone();
-        let Q2 = Q.clone();
+        let P = Arc::new(P.clone());
+        let Q = Arc::new(Q.clone());
 
-        // Thread 0 computes the lsd-DFAO, but only returns if no value satisfies prop
-        // The msd-DFAO is required to know the smallest value
-        // This thread is useful because there are edge cases where there is no value, but the msd-DFAO is much larger than the lsd-DFAO
-        let tx0 = tx.clone();
-        thread::spawn(move || {
-            let max_deg = std::cmp::max(P0.degree() - 1, Q0.degree()) as usize;
-            match DFAO::poly_auto_fail_on_prop(
-                &P0,
-                &Q0,
-                |poly| prop(&ModIntVector::from_poly(poly, 2 * max_deg + 1)),
-                state_bound,
-            ) {
-                Ok(Some(_)) => {
-                    let _ = tx0.send(Ok(None));
-                }
-                _ => {}
-            }
-        });
-
-        // Thread 1 computes values of the sequence directly
+        // This thread computes values of the sequence directly and checks prop
         // This thread usually completes first if there is a value for which prop is satisfied
-        let tx1 = tx.clone();
-        thread::spawn(move || {
-            if let Some(result) =
-                Self::compute_shortest_prop_directly(&P1, &Q1, |v| prop1(v), flag1)
-            {
-                let _ = tx1.send(Ok(result));
-            }
-        });
+        {
+            let tx = tx.clone();
+            let P = Arc::clone(&P);
+            let Q = Arc::clone(&Q);
+            let prop = Arc::clone(&prop);
+            let flag = Arc::clone(&cancel_flag);
 
-        // Thread 2 computes the msd-DFAO
-        thread::spawn(move || {
-            let maybe_result = Self::compute_shortest_prop_using_dfao(
-                &P2,
-                &Q2,
-                |v| prop2(v),
-                state_bound,
-                Some(flag2),
-            );
-            if let Ok(result) = maybe_result {
-                let _ = tx.send(Ok(result));
-            } else if let Err(err_msg) = maybe_result {
-                if err_msg != "Process was cancelled" {
-                    let _ = tx.send(Err(err_msg));
+            thread::spawn(move || {
+                if let Some(result) =
+                    Self::compute_shortest_prop_directly(&P, &Q, |v| prop(v), flag)
+                {
+                    let _ = tx.send(Ok(result));
                 }
-            }
-        });
+            });
+        }
+
+        // This thread computes the lsd-DFAO, but only returns if it is completed and no value satisfies prop
+        // Having a shortest-path to a lsd-DFAO state does not guarantee that this is the smallest value
+        // This thread is useful because there are cases where there is no value, but the msd-DFAO is much larger than the lsd-DFAO
+        {
+            let tx = tx.clone();
+            let P = Arc::clone(&P);
+            let Q = Arc::clone(&Q);
+            let prop = Arc::clone(&prop);
+
+            thread::spawn(move || {
+                let max_deg = std::cmp::max(P.degree() - 1, Q.degree()) as usize;
+                match DFAO::poly_auto_fail_on_prop(
+                    &P,
+                    &Q,
+                    // TODO: Fix this bug, it treats a row as a column (currently only being used for constant term, hence not caught by tests)
+                    |poly| prop(&ModIntVector::from_poly(poly, 2 * max_deg + 1)),
+                    state_bound,
+                ) {
+                    Ok(Some(_)) => {
+                        let _ = tx.send(Ok(None));
+                    }
+                    _ => {}
+                }
+            });
+        }
+
+        // This thread computes the msd-DFAO and returns the value of the shortest path to a prop-satisfying state
+        // This thread is useful because there are cases where there is no value, but the msd-DFAO is much smaller than the lsd-DFAO
+        {
+            let tx = tx.clone();
+            let P = Arc::clone(&P);
+            let Q = Arc::clone(&Q);
+            let prop = Arc::clone(&prop);
+            let flag = Arc::clone(&cancel_flag);
+
+            thread::spawn(move || {
+                let maybe_result = Self::compute_shortest_prop_using_dfao(
+                    &P,
+                    &Q,
+                    |v| prop(v),
+                    state_bound,
+                    Some(flag),
+                );
+                if let Ok(result) = maybe_result {
+                    let _ = tx.send(Ok(result));
+                } else if let Err(err_msg) = maybe_result {
+                    if err_msg != "Process was cancelled" {
+                        let _ = tx.send(Err(err_msg));
+                    }
+                }
+            });
+        }
 
         // Receive the first result
         let result = rx.recv().unwrap();
 
-        // Signal cancellation to the other thread
+        // Signal cancellation to the other threads
         cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
 
         result
