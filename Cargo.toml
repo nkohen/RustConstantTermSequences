@@ -6,3 +6,10 @@ edition = "2024"
 [dependencies]
 graphviz-rust = "0.9.4"
 either = "1.15.0"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "benches"
+harness = false

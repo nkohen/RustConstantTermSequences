@@ -143,4 +143,22 @@ fn main() {
         .unwrap(),
         None
     );
+
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let start = SystemTime::now();
+    println!(
+        "{} states",
+        DFAO::poly_auto(
+            &LaurentPoly::from_string("x^8 + x^6 + x + 1 + x^-6 + x^-8", 2),
+            &LaurentPoly::one(2),
+            10000
+        )
+        .unwrap()
+        .states
+        .len()
+    );
+    let end = SystemTime::now();
+    let duration =
+        end.duration_since(UNIX_EPOCH).unwrap() - start.duration_since(UNIX_EPOCH).unwrap();
+    println!("states computed in {} milliseconds", duration.as_millis());
 }
