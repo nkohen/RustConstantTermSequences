@@ -2,6 +2,7 @@ use crate::laurent_poly::LaurentPoly;
 use crate::lin_rep::LinRep;
 use crate::mod_int::ModInt;
 use crate::mod_int_vector::ModIntVector;
+use crate::sequences::constant_term_reduce;
 use either::{Either, Left, Right};
 use graphviz_rust::cmd::{CommandArg, Format};
 use graphviz_rust::dot_structures::Graph;
@@ -10,6 +11,9 @@ use graphviz_rust::{exec, parse};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::Hash;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, mpsc};
+use std::thread;
 
 #[derive(Debug)]
 pub struct DFAO<A: Eq + Hash, S: Clone + Eq + Hash> {
@@ -37,6 +41,7 @@ impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
         reduction_rule: F1,
         stop_prop: F2,
         state_bound: usize,
+        cancel_flag_opt: Option<Arc<AtomicBool>>,
     ) -> Result<Either<Self, Vec<u64>>, String>
     where
         F1: Fn(&S, ModInt) -> S,
@@ -52,6 +57,12 @@ impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
         let mut transitions = HashMap::new();
 
         while k < states_with_paths.len() {
+            if let Some(cancel_flag) = &cancel_flag_opt {
+                if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err("Process was cancelled".to_string());
+                }
+            }
+
             let (current_state, path) = states_with_paths.get(k).unwrap().clone();
             for i in 0..modulus {
                 let new_state = reduction_rule(&current_state, ModInt::new(i, modulus));
@@ -103,6 +114,7 @@ impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
         modulus: u64,
         reduction_rule: F,
         state_bound: usize,
+        cancel_flag_opt: Option<Arc<AtomicBool>>,
     ) -> Result<Self, String>
     where
         F: Fn(&S, ModInt) -> S,
@@ -113,6 +125,7 @@ impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
             reduction_rule,
             |_| false,
             state_bound,
+            cancel_flag_opt,
         )
         .map(|machine| machine.unwrap_left())
     }
@@ -144,7 +157,32 @@ impl DFAO<ModInt, LaurentPoly> {
             p,
             |state, i| P.pow(&i.value).mul(state).lambda_reduce(),
             state_bound,
+            None,
         )
+    }
+
+    pub fn poly_auto_fail_on_prop<F>(
+        P: &LaurentPoly,
+        Q: &LaurentPoly,
+        prop: F,
+        state_bound: usize,
+    ) -> Result<Option<Self>, String>
+    where
+        F: Fn(&LaurentPoly) -> bool,
+    {
+        assert_eq!(P.modulus, Q.modulus);
+        Self::from_reduction_rules_until_prop(
+            &Q,
+            P.modulus,
+            |state, i| P.pow(&i.value).mul(state).lambda_reduce(),
+            prop,
+            state_bound,
+            None,
+        )
+        .map(|machine_or_zero| match machine_or_zero {
+            Left(machine) => Some(machine),
+            Right(_) => None,
+        })
     }
 
     pub fn poly_auto_fail_on_zero(
@@ -152,19 +190,12 @@ impl DFAO<ModInt, LaurentPoly> {
         Q: &LaurentPoly,
         state_bound: usize,
     ) -> Result<Option<Self>, String> {
-        assert_eq!(P.modulus, Q.modulus);
-        let p = P.modulus;
-        Self::from_reduction_rules_until_prop(
-            &Q,
-            p,
-            |state, i| P.pow(&i.value).mul(state).lambda_reduce(),
-            |state| state.constant_term() == ModInt::zero(p),
+        Self::poly_auto_fail_on_prop(
+            P,
+            Q,
+            |state| state.constant_term() == ModInt::zero(P.modulus),
             state_bound,
         )
-        .map(|machine_or_zero| match machine_or_zero {
-            Left(machine) => Some(machine),
-            Right(_) => None,
-        })
     }
 
     pub fn compute_ct(&self, n: u64) -> ModInt {
@@ -188,6 +219,7 @@ impl DFAO<ModInt, ModIntVector> {
             p,
             |state, i| lin_rep.mat_func[i.value as usize].right_mul(&state),
             state_bound,
+            None,
         )
     }
 
@@ -205,6 +237,7 @@ impl DFAO<ModInt, ModIntVector> {
             p,
             |state, i| lin_rep.mat_func[i.value as usize].left_mul(&state),
             state_bound,
+            None,
         )
     }
 
@@ -221,11 +254,42 @@ impl DFAO<ModInt, ModIntVector> {
         })
     }
 
-    pub fn compute_shortest_prop<F>(
+    // This function will not terminate without using cancel_flag if prop is never satisfied
+    pub fn compute_shortest_prop_directly<F>(
+        P: &LaurentPoly,
+        Q: &LaurentPoly,
+        prop: F,
+        cancel_flag: Arc<AtomicBool>,
+    ) -> Option<Option<u64>>
+    where
+        F: Fn(&ModIntVector) -> bool,
+    {
+        assert_eq!(P.modulus, Q.modulus);
+        let max_deg = std::cmp::max(P.degree() - 1, Q.degree());
+        let mut n = 0;
+        loop {
+            if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                return None;
+            }
+
+            let poly_as_vec = ModIntVector::from_poly(
+                &constant_term_reduce(&P, &Q, &n),
+                2 * max_deg as usize + 1,
+            );
+            if prop(&poly_as_vec) {
+                return Some(Some(n));
+            }
+
+            n += 1;
+        }
+    }
+
+    pub fn compute_shortest_prop_using_dfao<F>(
         P: &LaurentPoly,
         Q: &LaurentPoly,
         prop: F,
         state_bound: usize,
+        cancel_flag_opt: Option<Arc<AtomicBool>>,
     ) -> Result<Option<u64>, String>
     where
         F: Fn(&ModIntVector) -> bool,
@@ -239,6 +303,7 @@ impl DFAO<ModInt, ModIntVector> {
             |state, i| lin_rep.mat_func[i.value as usize].left_mul(&state),
             prop,
             state_bound,
+            cancel_flag_opt,
         )
         .map(|machine_or_first| match machine_or_first {
             Left(_) => None,
@@ -253,6 +318,86 @@ impl DFAO<ModInt, ModIntVector> {
         })
     }
 
+    pub fn compute_shortest_prop<F>(
+        P: &LaurentPoly,
+        Q: &LaurentPoly,
+        prop: F,
+        state_bound: usize,
+    ) -> Result<Option<u64>, String>
+    where
+        F: Fn(&ModIntVector) -> bool + Send + Sync + 'static,
+    {
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let prop = Arc::new(prop);
+        let flag1 = Arc::clone(&cancel_flag);
+        let flag2 = Arc::clone(&cancel_flag);
+        let prop1 = Arc::clone(&prop);
+        let prop2 = Arc::clone(&prop);
+        let P0 = P.clone();
+        let Q0 = Q.clone();
+        let P1 = P.clone();
+        let Q1 = Q.clone();
+        let P2 = P.clone();
+        let Q2 = Q.clone();
+
+        // Thread 0 computes the lsd-DFAO, but only returns if no value satisfies prop
+        // The msd-DFAO is required to know the smallest value
+        // This thread is useful because there are edge cases where there is no value, but the msd-DFAO is much larger than the lsd-DFAO
+        let tx0 = tx.clone();
+        thread::spawn(move || {
+            let max_deg = std::cmp::max(P0.degree() - 1, Q0.degree()) as usize;
+            match DFAO::poly_auto_fail_on_prop(
+                &P0,
+                &Q0,
+                |poly| prop(&ModIntVector::from_poly(poly, 2 * max_deg + 1)),
+                state_bound,
+            ) {
+                Ok(Some(_)) => {
+                    let _ = tx0.send(Ok(None));
+                }
+                _ => {}
+            }
+        });
+
+        // Thread 1 computes values of the sequence directly
+        // This thread usually completes first if there is a value for which prop is satisfied
+        let tx1 = tx.clone();
+        thread::spawn(move || {
+            if let Some(result) =
+                Self::compute_shortest_prop_directly(&P1, &Q1, |v| prop1(v), flag1)
+            {
+                let _ = tx1.send(Ok(result));
+            }
+        });
+
+        // Thread 2 computes the msd-DFAO
+        thread::spawn(move || {
+            let maybe_result = Self::compute_shortest_prop_using_dfao(
+                &P2,
+                &Q2,
+                |v| prop2(v),
+                state_bound,
+                Some(flag2),
+            );
+            if let Ok(result) = maybe_result {
+                let _ = tx.send(Ok(result));
+            } else if let Err(err_msg) = maybe_result {
+                if err_msg != "Process was cancelled" {
+                    let _ = tx.send(Err(err_msg));
+                }
+            }
+        });
+
+        // Receive the first result
+        let result = rx.recv().unwrap();
+
+        // Signal cancellation to the other thread
+        cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        result
+    }
+
     pub fn compute_shortest_ct_prop<F>(
         P: &LaurentPoly,
         Q: &LaurentPoly,
@@ -260,12 +405,14 @@ impl DFAO<ModInt, ModIntVector> {
         state_bound: usize,
     ) -> Result<Option<u64>, String>
     where
-        F: Fn(&ModInt) -> bool,
+        F: Fn(&ModInt) -> bool + Send + Sync + 'static,
     {
+        let Q = Q.clone();
+        let Q2 = Q.clone();
         Self::compute_shortest_prop(
             P,
-            Q,
-            |vec| prop(&vec.dot(&ModIntVector::from_poly(Q, vec.dim))),
+            &Q2,
+            move |vec| prop(&vec.dot(&ModIntVector::from_poly(&Q, vec.dim))),
             state_bound,
         )
     }
@@ -275,13 +422,13 @@ impl DFAO<ModInt, ModIntVector> {
         Q: &LaurentPoly,
         state_bound: usize,
     ) -> Result<Option<u64>, String> {
-        // First optimistically try to compute the lsd-first DFA with a low state_bound
-        match DFAO::poly_auto_fail_on_zero(P, Q, 100 + P.modulus as usize) {
-            Ok(Some(_)) => return Ok(None),
-            _ => {}
-        }
-
-        Self::compute_shortest_ct_prop(P, Q, |value| value == &ModInt::zero(P.modulus), state_bound)
+        let P = P.clone();
+        Self::compute_shortest_ct_prop(
+            &P,
+            Q,
+            move |value| value == &ModInt::zero(P.modulus),
+            state_bound,
+        )
     }
 
     pub fn compute_shortest_non_zero(
@@ -289,7 +436,13 @@ impl DFAO<ModInt, ModIntVector> {
         Q: &LaurentPoly,
         state_bound: usize,
     ) -> Result<Option<u64>, String> {
-        Self::compute_shortest_ct_prop(P, Q, |value| value != &ModInt::zero(P.modulus), state_bound)
+        let P = P.clone();
+        Self::compute_shortest_ct_prop(
+            &P,
+            Q,
+            move |value| value != &ModInt::zero(P.modulus),
+            state_bound,
+        )
     }
 }
 
@@ -477,6 +630,117 @@ mod tests {
         let Q = LaurentPoly::from_string("1 - x^2", 11);
         let dfao = DFAO::lin_rep_reverse_machine(&P, &Q, 279);
         assert_eq!(dfao.unwrap_err(), "Number of states exceeded 279.");
+    }
+
+    #[test]
+    fn test_compute_shortest_prop_directly() {
+        assert_eq!(
+            DFAO::compute_shortest_prop_directly(
+                &LaurentPoly::from_string("x + 1 + x^-1", 3),
+                &LaurentPoly::one(3),
+                |v| v.constant_term() == ModInt::zero(3),
+                Arc::new(AtomicBool::new(false))
+            )
+            .unwrap()
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            DFAO::compute_shortest_prop_directly(
+                &LaurentPoly::from_string("x + 1 + x^-2", 5),
+                &LaurentPoly::one(5),
+                |v| v.constant_term() == ModInt::zero(5),
+                Arc::new(AtomicBool::new(false))
+            )
+            .unwrap()
+            .unwrap(),
+            39
+        );
+        assert_eq!(
+            DFAO::compute_shortest_prop_directly(
+                &LaurentPoly::from_string("x + 1 + x^-7", 5),
+                &LaurentPoly::one(5),
+                |v| v.constant_term() == ModInt::zero(5),
+                Arc::new(AtomicBool::new(false))
+            )
+            .unwrap()
+            .unwrap(),
+            14
+        );
+        assert_eq!(
+            DFAO::compute_shortest_prop_directly(
+                &LaurentPoly::from_string("x + 1 + x^-48", 5),
+                &LaurentPoly::one(5),
+                |v| v.constant_term() == ModInt::zero(5),
+                Arc::new(AtomicBool::new(false))
+            )
+            .unwrap()
+            .unwrap(),
+            49
+        );
+    }
+
+    #[test]
+    fn test_compute_shortest_prop_using_dfao() {
+        assert_eq!(
+            DFAO::compute_shortest_prop_using_dfao(
+                &LaurentPoly::from_string("x + 1 + x^-1", 3),
+                &LaurentPoly::one(3),
+                |v| v.constant_term() == ModInt::zero(3),
+                10000,
+                None
+            )
+            .unwrap()
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            DFAO::compute_shortest_prop_using_dfao(
+                &LaurentPoly::from_string("x + 1 + x^-2", 5),
+                &LaurentPoly::one(5),
+                |v| v.constant_term() == ModInt::zero(5),
+                10000,
+                None
+            )
+            .unwrap()
+            .unwrap(),
+            39
+        );
+        assert_eq!(
+            DFAO::compute_shortest_prop_using_dfao(
+                &LaurentPoly::from_string("x + 1 + x^-7", 5),
+                &LaurentPoly::one(5),
+                |v| v.constant_term() == ModInt::zero(5),
+                10000,
+                None
+            )
+            .unwrap()
+            .unwrap(),
+            14
+        );
+        assert_eq!(
+            DFAO::compute_shortest_prop_using_dfao(
+                &LaurentPoly::from_string("x + 1 + x^-48", 5),
+                &LaurentPoly::one(5),
+                |v| v.constant_term() == ModInt::zero(5),
+                10000,
+                None
+            )
+            .unwrap()
+            .unwrap(),
+            49
+        );
+        assert_eq!(
+            DFAO::compute_shortest_prop_using_dfao(
+                &LaurentPoly::from_string("x + 1 + x^-11", 2),
+                &LaurentPoly::one(2),
+                |v| v.constant_term() == ModInt::zero(2),
+                10000,
+                None
+            )
+            .unwrap(),
+            None
+        );
     }
 
     #[test]

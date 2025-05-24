@@ -5,7 +5,7 @@ pub fn constant_term_slow(P: &LaurentPoly, Q: &LaurentPoly, n: &u64) -> ModInt {
     P.pow(n).mul(Q).constant_term()
 }
 
-pub fn constant_term(P: &LaurentPoly, Q: &LaurentPoly, n: &u64) -> ModInt {
+pub fn constant_term_reduce(P: &LaurentPoly, Q: &LaurentPoly, n: &u64) -> LaurentPoly {
     let mut Q = Q.clone();
     let mut n = n.clone();
     let p = P.modulus;
@@ -16,7 +16,11 @@ pub fn constant_term(P: &LaurentPoly, Q: &LaurentPoly, n: &u64) -> ModInt {
         Q = P.pow(&r).mul(&Q).lambda_reduce()
     }
 
-    Q.constant_term()
+    Q
+}
+
+pub fn constant_term(P: &LaurentPoly, Q: &LaurentPoly, n: &u64) -> ModInt {
+    constant_term_reduce(P, Q, n).constant_term()
 }
 
 #[cfg(test)]

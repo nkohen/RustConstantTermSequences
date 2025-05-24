@@ -25,11 +25,24 @@ pub fn rowland_zeilberger(c: &mut Criterion) {
 pub fn first_zero_motzkin(c: &mut Criterion) {
     let mut group = c.benchmark_group("first_zero_motzkin");
     for p in [2, 11, 17, 23, 29].iter() {
-        group.bench_with_input(BenchmarkId::new("DFAO-based", p), p, |b, p| {
+        group.bench_with_input(BenchmarkId::new("DFAO-based or Direct", p), p, |b, p| {
             b.iter(|| {
                 let P = LaurentPoly::from_string("x + 1 + x^-1", *p);
                 let Q = LaurentPoly::from_string("1 - x^2", *p);
                 let _ = DFAO::compute_shortest_zero(&P, &Q, 10000);
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("DFAO-based", p), p, |b, p| {
+            b.iter(|| {
+                let P = LaurentPoly::from_string("x + 1 + x^-1", *p);
+                let Q = LaurentPoly::from_string("1 - x^2", *p);
+                let _ = DFAO::compute_shortest_prop_using_dfao(
+                    &P,
+                    &Q,
+                    |v| v.constant_term() == ModInt::zero(*p),
+                    10000,
+                    None,
+                );
             });
         });
         group.bench_with_input(BenchmarkId::new("Direct", p), p, |b, p| {
@@ -61,17 +74,24 @@ pub fn first_zero_big(c: &mut Criterion) {
     ]
     .iter()
     {
-        group.bench_with_input(BenchmarkId::new("DFAO-based", P.degree()), P, |b, P| {
+        group.bench_with_input(
+            BenchmarkId::new("Direct or DFAO-Based", P.degree()),
+            P,
+            |b, P| {
+                b.iter(|| {
+                    let _ = DFAO::compute_shortest_zero(&P, &Q, 10000);
+                });
+            },
+        );
+        group.bench_with_input(BenchmarkId::new("DFAO-Based", P.degree()), P, |b, P| {
             b.iter(|| {
-                let _ = DFAO::compute_shortest_zero(&P, &Q, 10000);
-            });
-        });
-        group.bench_with_input(BenchmarkId::new("Direct", P.degree()), P, |b, P| {
-            b.iter(|| {
-                let mut n = 0;
-                while constant_term(&P, &Q, &n) != ModInt::zero(2) && n < 2^(2^(2*P.degree() + 1)) {
-                    n += 1;
-                }
+                let _ = DFAO::compute_shortest_prop_using_dfao(
+                    &P,
+                    &Q,
+                    |v| v.constant_term() == ModInt::zero(2),
+                    10000,
+                    None,
+                );
             });
         });
     }
