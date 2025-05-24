@@ -1,5 +1,6 @@
 use RustConstantTermSequences::dfao::DFAO;
 use RustConstantTermSequences::laurent_poly::LaurentPoly;
+use RustConstantTermSequences::lin_rep::LinRep;
 use RustConstantTermSequences::mod_int::ModInt;
 use RustConstantTermSequences::sequences::{constant_term, constant_term_slow};
 use RustConstantTermSequences::*;
@@ -36,9 +37,9 @@ pub fn first_zero_motzkin(c: &mut Criterion) {
             b.iter(|| {
                 let P = LaurentPoly::from_string("x + 1 + x^-1", *p);
                 let Q = LaurentPoly::from_string("1 - x^2", *p);
-                let _ = DFAO::compute_shortest_prop_using_dfao(
-                    &P,
-                    &Q,
+                let lin_rep = LinRep::for_ct_sequence(&P, &Q);
+                let _ = DFAO::compute_shortest_prop_using_msd_dfao(
+                    &lin_rep,
                     |v| v.constant_term() == ModInt::zero(*p),
                     10000,
                     None,
@@ -85,9 +86,9 @@ pub fn first_zero_big(c: &mut Criterion) {
         );
         group.bench_with_input(BenchmarkId::new("DFAO-Based", P.degree()), P, |b, P| {
             b.iter(|| {
-                let _ = DFAO::compute_shortest_prop_using_dfao(
-                    &P,
-                    &Q,
+                let lin_rep = LinRep::for_ct_sequence(&P, &Q);
+                let _ = DFAO::compute_shortest_prop_using_msd_dfao(
+                    &lin_rep,
                     |v| v.constant_term() == ModInt::zero(2),
                     10000,
                     None,

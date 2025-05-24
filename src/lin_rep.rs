@@ -51,7 +51,7 @@ impl LinRep {
         }
     }
 
-    pub fn compute(&self, n: u64) -> ModInt {
+    pub fn compute_functional(&self, n: u64) -> ModIntVector {
         let p = self.modulus;
         let mut n = n;
         let mut digits: Vec<ModInt> = Vec::new();
@@ -60,11 +60,18 @@ impl LinRep {
             digits.push(ModInt::new(r, p));
             n = (n - r) / p;
         }
+        digits.reverse();
 
-        let mut mat: ModIntMatrix = ModIntMatrix::id(self.rank, self.modulus);
+        let mut functional: ModIntVector = self.col_vec.clone();
         for digit in digits {
-            mat = mat.mul(&self.mat_func[digit.value as usize]);
+            functional = self.mat_func[digit.value as usize].left_mul(&functional);
         }
-        self.row_vec.dot(&mat.left_mul(&self.col_vec))
+
+        functional
+    }
+
+    pub fn compute(&self, n: u64) -> ModInt {
+        let functional = self.compute_functional(n);
+        self.row_vec.dot(&functional)
     }
 }
