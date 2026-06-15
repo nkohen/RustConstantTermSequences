@@ -91,6 +91,26 @@ impl ModIntMatrix {
         ModIntVector::new_col(entries)
     }
 
+    /// Raw row action `row * M` on plain `u64` coefficients (entries assumed already reduced
+    /// mod `modulus`), skipping the `ModInt`/`ModIntVector` round-trip. Same result as
+    /// `right_mul`: `out[j] = sum_i row[i] * entries[i][j]`.
+    pub fn right_mul_u64(&self, row: &[u64]) -> Vec<u64> {
+        debug_assert_eq!(row.len(), self.dim);
+        let m = self.modulus;
+        let mut out = vec![0u64; self.dim];
+        for i in 0..self.dim {
+            let r = row[i];
+            if r == 0 {
+                continue;
+            }
+            let row_i = &self.entries[i];
+            for j in 0..self.dim {
+                out[j] = (out[j] + r * row_i[j].value) % m;
+            }
+        }
+        out
+    }
+
     pub fn right_mul(&self, row_vec: &ModIntVector) -> ModIntVector {
         assert!(row_vec.is_row);
         assert_eq!(self.dim, row_vec.dim);

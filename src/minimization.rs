@@ -34,7 +34,6 @@ use crate::laurent_poly::LaurentPoly;
 use crate::lin_rep::LinRep;
 use crate::mod_int::ModInt;
 use crate::mod_int_matrix::ModIntMatrix;
-use crate::mod_int_vector::ModIntVector;
 use std::collections::HashMap;
 
 /// A minimized forward linear representation `(v', {M_d'}, w')` of dimension `dim`
@@ -250,17 +249,75 @@ pub fn kernel_seeds(poly: &LaurentPoly, p: u64, max_deg: Option<usize>) -> Vec<V
 
 // ---- gamma-closure + Schuetzenberger quotient (brief 01) ---------------------------------
 
-/// `u * M`: the row action (`M.right_mul(u)`), expressed on plain `Vec<u64>` rows.
-fn row_times_mat(row: &[u64], mat: &ModIntMatrix, p: u64) -> Vec<u64> {
-    let v = ModIntVector::new_row(row.iter().map(|&x| ModInt::new(x, p)).collect());
-    let out = mat.right_mul(&v);
-    out.entries.iter().map(|e| e.value).collect()
+/// `u * M`: the row action (`M.right_mul(u)`), expressed on plain `Vec<u64>` rows. Uses the raw
+/// `right_mul_u64` path so it skips the `ModInt`/`ModIntVector` round-trip.
+fn row_times_mat(row: &[u64], mat: &ModIntMatrix, _p: u64) -> Vec<u64> {
+    mat.right_mul_u64(row)
+}
+
+/// An incrementally-maintained reduced row basis over GF(p): each stored vector is normalized
+/// (leading pivot = 1) and reduced against the earlier ones, so a new candidate's independence
+/// is tested by one reduction pass. This lets `gamma_closure` reduce only the *new* rows each
+/// round instead of re-basing the whole generator set.
+struct RunningBasis {
+    rows: Vec<Vec<u64>>,
+    pivot_col: Vec<usize>,
+    dim: usize,
+    p: u64,
+    inv_tab: Vec<u64>,
+}
+
+impl RunningBasis {
+    fn new(dim: usize, p: u64) -> Self {
+        RunningBasis {
+            rows: Vec::new(),
+            pivot_col: Vec::new(),
+            dim,
+            p,
+            inv_tab: LinRep::inverse_table(p),
+        }
+    }
+
+    /// Reduce `v` against the current basis and, if independent, normalize and append it.
+    /// Returns true iff `v` extended the span (i.e. the basis grew).
+    fn insert(&mut self, mut v: Vec<u64>) -> bool {
+        let p = self.p;
+        for (bi, b) in self.rows.iter().enumerate() {
+            let c = self.pivot_col[bi];
+            if v[c] != 0 {
+                let f = v[c]; // b[c] == 1 (normalized)
+                for k in 0..self.dim {
+                    v[k] = (v[k] + (p - f * b[k] % p) % p) % p;
+                }
+            }
+        }
+        if let Some(c) = (0..self.dim).find(|&k| v[k] != 0) {
+            let inv = self.inv_tab[v[c] as usize];
+            for k in 0..self.dim {
+                v[k] = v[k] * inv % p;
+            }
+            self.rows.push(v);
+            self.pivot_col.push(c);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.rows.len()
+    }
 }
 
 /// Smallest gamma-invariant subspace of GF(p)^dim containing `seeds`: close under
 /// right-multiplication by each `mats[k]` (the action `u |-> Lambda_p(P^k u)`) until the dimension
 /// stabilizes. Returns a basis of `K`. `iter_cap` guards against non-termination (returns `Err`
 /// if the dimension has not stabilized within the cap).
+///
+/// Incremental: a running reduced basis is kept and only the rows added in the previous round are
+/// multiplied by each `mats[k]` and reduced against it, instead of re-basing the whole generator
+/// set every iteration. The resulting span is identical (closure is monotone), so the kernel and
+/// every downstream count are unchanged.
 pub fn gamma_closure(
     seeds: &[Vec<u64>],
     mats: &[ModIntMatrix],
@@ -268,19 +325,27 @@ pub fn gamma_closure(
     dim: usize,
     iter_cap: usize,
 ) -> Result<Vec<Vec<u64>>, String> {
-    let mut basis = LinRep::row_basis(seeds, dim, p);
+    let mut basis = RunningBasis::new(dim, p);
+    for s in seeds {
+        basis.insert(s.clone());
+    }
+    // Frontier = the rows added in the previous round (initially the whole seed basis); only these
+    // need their gamma-images examined this round.
+    let mut frontier: Vec<Vec<u64>> = basis.rows.clone();
     for _ in 0..iter_cap {
-        let mut gens = basis.clone();
-        for b in &basis {
+        let mut next_frontier: Vec<Vec<u64>> = Vec::new();
+        for b in &frontier {
             for mat in mats.iter() {
-                gens.push(row_times_mat(b, mat, p));
+                let img = row_times_mat(b, mat, p);
+                if basis.insert(img.clone()) {
+                    next_frontier.push(img);
+                }
             }
         }
-        let next = LinRep::row_basis(&gens, dim, p);
-        if next.len() == basis.len() {
-            return Ok(basis);
+        if next_frontier.is_empty() {
+            return Ok(basis.rows);
         }
-        basis = next;
+        frontier = next_frontier;
     }
     Err(format!("gamma-closure did not stabilize within iter_cap={iter_cap}"))
 }
@@ -292,12 +357,20 @@ fn build_mats(poly: &LaurentPoly, p: u64, max_deg: usize) -> Vec<ModIntMatrix> {
     let deg = max_deg as i64;
     let mut mats = Vec::new();
     let mut power = LaurentPoly::one(p);
+    // Window of exponents the (i, j) loop indexes, identical to LinRep::compute_mat_for_poly.
+    let lo = -deg - deg * p as i64;
+    let hi = deg + deg * p as i64;
     for _ in 0..p {
+        // Dense coefficient array once per power, then O(1) cell reads (vs O(log t) BTreeMap).
+        let mut dense = vec![ModInt::zero(p); (hi - lo + 1) as usize];
+        for e in lo..=hi {
+            dense[(e - lo) as usize] = power.get_coefficient(&e);
+        }
         let mut entries = vec![vec![ModInt::zero(p); dim]; dim];
         for i in 0..dim {
             for j in 0..dim {
                 let index = (deg - i as i64) - ((deg - j as i64) * p as i64);
-                entries[i][j] = power.get_coefficient(&index);
+                entries[i][j] = dense[(index - lo) as usize];
             }
         }
         mats.push(ModIntMatrix::new(entries, dim, p));
@@ -373,6 +446,7 @@ fn solve_coords(x: &[u64], basis: &[Vec<u64>], p: u64) -> Option<Vec<u64>> {
         }
     }
     let mut b: Vec<u64> = x.iter().map(|&c| c % p).collect();
+    let inv_tab = LinRep::inverse_table(p);
     let mut where_pivot = vec![usize::MAX; n]; // which row pivots each unknown column
     let mut row = 0usize;
     for col in 0..n {
@@ -390,7 +464,7 @@ fn solve_coords(x: &[u64], basis: &[Vec<u64>], p: u64) -> Option<Vec<u64>> {
         };
         a.swap(s, row);
         b.swap(s, row);
-        let inv = ModInt::new(a[row][col], p).inv().value;
+        let inv = inv_tab[a[row][col] as usize];
         for c in 0..n {
             a[row][c] = a[row][c] * inv % p;
         }
@@ -442,13 +516,15 @@ pub fn quotient_rep(
     // vectors are the coset representatives.
     let inter = intersect(&u_basis, kernel, p);
     // complete `inter` to a basis of U: greedily add u-basis vectors independent of current span.
-    let mut spanning = inter.clone();
+    // A single running reduced basis (seeded with `inter`) tests each candidate's independence in
+    // one reduction pass, instead of re-basing the whole growing `spanning` set twice per vector.
+    let mut spanning = RunningBasis::new(dim, p);
+    for iv in &inter {
+        spanning.insert(iv.clone());
+    }
     let mut reps: Vec<Vec<u64>> = Vec::new();
     for ub in &u_basis {
-        let mut trial = spanning.clone();
-        trial.push(ub.clone());
-        if LinRep::row_basis(&trial, dim, p).len() > LinRep::row_basis(&spanning, dim, p).len() {
-            spanning.push(ub.clone());
+        if spanning.insert(ub.clone()) {
             reps.push(ub.clone());
         }
     }
@@ -574,6 +650,7 @@ fn intersection_via_nullspace(
 /// Null space of an `rows x cols` matrix over GF(p): a basis of `{ y : M y = 0 }`.
 fn null_space(matrix: &[Vec<u64>], rows: usize, cols: usize, p: u64) -> Vec<Vec<u64>> {
     let mut m: Vec<Vec<u64>> = matrix.iter().map(|r| r.iter().map(|&c| c % p).collect()).collect();
+    let inv_tab = LinRep::inverse_table(p);
     let mut pivot_col_of_row: Vec<Option<usize>> = vec![None; rows];
     let mut is_pivot_col = vec![false; cols];
     let mut row = 0usize;
@@ -593,7 +670,7 @@ fn null_space(matrix: &[Vec<u64>], rows: usize, cols: usize, p: u64) -> Vec<Vec<
             None => continue,
         };
         m.swap(s, row);
-        let inv = ModInt::new(m[row][col], p).inv().value;
+        let inv = inv_tab[m[row][col] as usize];
         for c in 0..cols {
             m[row][c] = m[row][c] * inv % p;
         }

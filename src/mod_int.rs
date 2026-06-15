@@ -67,7 +67,17 @@ impl Add for ModInt {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
         assert_eq!(self.modulus, rhs.modulus);
-        ModInt::new((self.value + rhs.value) % self.modulus, self.modulus)
+        // Both operands are already reduced (value < m, by `ModInt::new`), so the sum is
+        // < 2m and a single subtract-if-overflow reduces it (no second `%`). value < m <= u64
+        // so `value + value < 2m` cannot overflow u64 in this domain (m fits in u64).
+        let mut sum = self.value + rhs.value;
+        if sum >= self.modulus {
+            sum -= self.modulus;
+        }
+        ModInt {
+            value: sum,
+            modulus: self.modulus,
+        }
     }
 }
 

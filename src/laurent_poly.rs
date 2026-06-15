@@ -139,15 +139,23 @@ impl LaurentPoly {
     }
 
     pub fn pow(&self, exponent: &u64) -> Self {
-        let mut i = exponent.clone();
-        let mut poly = LaurentPoly::one(self.modulus);
+        // Square-and-multiply: O(log e) multiplies instead of O(e). Multiplication is
+        // associative/commutative over GF(p)[t, t^-1], so the result is identical.
+        let mut e = exponent.clone();
+        let mut result = LaurentPoly::one(self.modulus);
+        let mut base = self.clone();
 
-        while i > 0 {
-            i -= 1;
-            poly = poly.mul(&self);
+        while e > 0 {
+            if e & 1 == 1 {
+                result = result.mul(&base);
+            }
+            e >>= 1;
+            if e > 0 {
+                base = base.mul(&base);
+            }
         }
 
-        poly
+        result
     }
 
     pub fn get_coefficient(&self, index: &i64) -> ModInt {

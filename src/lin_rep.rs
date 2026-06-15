@@ -19,10 +19,20 @@ impl LinRep {
         let mut entries = vec![vec![ModInt::zero(modulus); dim]; dim];
         let deg = max_deg as i64;
 
+        // Dense coefficient array over the exponent window the loop indexes, so each cell is an
+        // O(1) array read instead of an O(log t) BTreeMap `get_coefficient`. The accessed index
+        // is (deg - i) - (deg - j)*p with i, j in [0, 2*max_deg], so it stays in [lo, hi] below.
+        let lo = -deg - deg * modulus as i64;
+        let hi = deg + deg * modulus as i64;
+        let mut dense = vec![ModInt::zero(modulus); (hi - lo + 1) as usize];
+        for e in lo..=hi {
+            dense[(e - lo) as usize] = poly.get_coefficient(&e);
+        }
+
         for i in 0..dim {
             for j in 0..dim {
                 let index = (deg - i as i64) - ((deg - j as i64) * modulus as i64);
-                entries[i][j] = poly.get_coefficient(&index);
+                entries[i][j] = dense[(index - lo) as usize];
             }
         }
 
@@ -108,9 +118,22 @@ impl LinRep {
         Some(states)
     }
 
+    // GF(p) multiplicative inverse table: `tab[x]` is `x^-1 mod p` for `x in [1, p)` (tab[0] = 0).
+    // One Fermat modexp per residue, built once per call, so the elimination loops below index
+    // the pivot inverse in O(1) instead of paying a `pow` per pivot.
+    // Crate-visible so `minimization`'s eliminations share the same table builder.
+    pub(crate) fn inverse_table(p: u64) -> Vec<u64> {
+        let mut tab = vec![0u64; p as usize];
+        for x in 1..p {
+            tab[x as usize] = ModInt::new(x, p).inv().value;
+        }
+        tab
+    }
+
     // Basis of the span of `rows` over GF(p) by Gaussian elimination; its length is the rank.
     // Crate-visible so `minimization` reuses this single elimination routine (no second copy).
     pub(crate) fn row_basis(rows: &[Vec<u64>], dim: usize, p: u64) -> Vec<Vec<u64>> {
+        let inv_tab = Self::inverse_table(p);
         let mut basis: Vec<Vec<u64>> = Vec::new();
         let mut pivot_col: Vec<usize> = Vec::new();
         for r in rows {
@@ -125,7 +148,7 @@ impl LinRep {
                 }
             }
             if let Some(c) = (0..dim).find(|&k| v[k] != 0) {
-                let inv = ModInt::new(v[c], p).inv().value;
+                let inv = inv_tab[v[c] as usize];
                 for k in 0..dim {
                     v[k] = v[k] * inv % p;
                 }
@@ -150,13 +173,14 @@ impl LinRep {
         if cols == 0 {
             return 0;
         }
+        let inv_tab = Self::inverse_table(p);
         let mut rank = 0usize;
         let mut row = 0usize;
         for col in 0..cols {
             let sel = (row..rows).find(|&r| m[r][col] != 0);
             if let Some(s) = sel {
                 m.swap(row, s);
-                let inv = ModInt::new(m[row][col], p).inv().value;
+                let inv = inv_tab[m[row][col] as usize];
                 for k in 0..cols {
                     m[row][k] = m[row][k] * inv % p;
                 }

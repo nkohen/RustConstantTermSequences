@@ -54,6 +54,11 @@ impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
 
         let mut states_with_paths: Vec<(S, Vec<u64>)> = Vec::new();
         states_with_paths.push((initial_state.clone(), vec![]));
+        // Membership index (state -> its position in `states_with_paths`) so the dedup is an
+        // O(1) hash lookup instead of an O(N) linear scan; mirrors `build_kernel`'s `index`
+        // and `forward_reachable`'s `seen`. The per-state `path` stays in `states_with_paths`.
+        let mut state_index: HashMap<S, usize> = HashMap::new();
+        state_index.insert(initial_state.clone(), 0);
         let mut k = 0;
         let mut transitions = HashMap::new();
 
@@ -67,27 +72,24 @@ impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
             let (current_state, path) = states_with_paths.get(k).unwrap().clone();
             for i in 0..modulus {
                 let new_state = reduction_rule(&current_state, ModInt::new(i, modulus));
-                let mut new_state_index = states_with_paths.len();
-                for j in 0..states_with_paths.len() {
-                    let (state_j, _) = states_with_paths.get(j).unwrap();
-                    if state_j == &new_state {
-                        new_state_index = j;
-                        break;
-                    }
-                }
+                let new_state_index = match state_index.get(&new_state) {
+                    Some(&j) => j,
+                    None => {
+                        let mut new_path = path.clone();
+                        new_path.push(i);
 
-                if new_state_index == states_with_paths.len() {
-                    let mut new_path = path.clone();
-                    new_path.push(i);
-
-                    if stop_prop(&new_state) {
-                        return Ok(Right(new_path));
+                        if stop_prop(&new_state) {
+                            return Ok(Right(new_path));
+                        }
+                        let j = states_with_paths.len();
+                        state_index.insert(new_state.clone(), j);
+                        states_with_paths.push((new_state, new_path));
+                        if states_with_paths.len() > state_bound {
+                            return Err(format!("Number of states exceeded {}.", state_bound));
+                        }
+                        j
                     }
-                    states_with_paths.push((new_state, new_path));
-                    if states_with_paths.len() > state_bound {
-                        return Err(format!("Number of states exceeded {}.", state_bound));
-                    }
-                }
+                };
 
                 transitions.insert(
                     (current_state.clone(), ModInt::new(i, modulus)),
@@ -153,13 +155,27 @@ impl DFAO<ModInt, LaurentPoly> {
     pub fn poly_auto(P: &LaurentPoly, Q: &LaurentPoly, state_bound: usize) -> Result<Self, String> {
         assert_eq!(P.modulus, Q.modulus);
         let p = P.modulus;
+        // P^0..P^{p-1} do not depend on the state; compute them once and index by digit,
+        // as `LinRep::for_ct_sequence` does with its transition matrices.
+        let powers = Self::poly_powers(P, p);
         DFAO::from_reduction_rules(
             &Q,
             p,
-            |state, i| P.pow(&i.value).mul(state).lambda_reduce(),
+            |state, i| powers[i.value as usize].mul(state).lambda_reduce(),
             state_bound,
             None,
         )
+    }
+
+    /// `[P^0, P^1, ..., P^{p-1}]` built incrementally (one multiply per power).
+    fn poly_powers(P: &LaurentPoly, p: u64) -> Vec<LaurentPoly> {
+        let mut powers = Vec::with_capacity(p as usize);
+        let mut acc = LaurentPoly::one(P.modulus);
+        for _ in 0..p {
+            powers.push(acc.clone());
+            acc = acc.mul(P);
+        }
+        powers
     }
 
     pub fn poly_auto_fail_on_prop<F>(
@@ -173,10 +189,12 @@ impl DFAO<ModInt, LaurentPoly> {
         F: Fn(&LaurentPoly) -> bool,
     {
         assert_eq!(P.modulus, Q.modulus);
+        // Hoist the per-digit powers P^0..P^{p-1} out of the per-state reduction rule.
+        let powers = Self::poly_powers(P, P.modulus);
         Self::from_reduction_rules_until_prop(
             &Q,
             P.modulus,
-            |state, i| P.pow(&i.value).mul(state).lambda_reduce(),
+            |state, i| powers[i.value as usize].mul(state).lambda_reduce(),
             prop,
             state_bound,
             cancel_flag_opt,
