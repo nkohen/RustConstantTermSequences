@@ -167,6 +167,35 @@ impl DFAO<ModInt, LaurentPoly> {
         )
     }
 
+    /// The **raw Rowland–Zeilberger automaton** of `ct[P^n Q] mod p`, with **no minimization
+    /// applied**.
+    ///
+    /// "No minimization" means specifically:
+    /// - the Moore partition-refinement minimizer (`DFAO::minimize`) is **not** run, and
+    /// - no kernel / minimal-dual reduction (`minimization::minimal_dual` etc.) is applied.
+    ///
+    /// The states are the distinct reduced Laurent polynomials reachable from `Q` under the RZ
+    /// transition `u |-> Lambda_p(P^d * u)` (digit `d`), and its output on a state is that
+    /// polynomial's constant term. The BFS construction does identify two reachable states when
+    /// they are the *same reduced polynomial* — this construction-time merge is intrinsic to the
+    /// RZ machine itself, **not** a minimization step; the returned machine can still have more
+    /// states than the Myhill–Nerode minimal one.
+    ///
+    /// This is the explicit, supported entry point for callers that need the un-minimized RZ
+    /// machine (e.g. to compare it against its own minimization). It is a thin alias of
+    /// `poly_auto`, which already builds exactly this machine. `state_bound` caps the BFS;
+    /// `Err` is returned if the raw state count exceeds it.
+    ///
+    /// To obtain the minimized machine, call `.minimize(p, |s| s.constant_term())` on the result
+    /// (that pair — raw then minimize — is equivalent to the standard minimized path).
+    pub fn rz_machine(
+        P: &LaurentPoly,
+        Q: &LaurentPoly,
+        state_bound: usize,
+    ) -> Result<Self, String> {
+        Self::poly_auto(P, Q, state_bound)
+    }
+
     /// `[P^0, P^1, ..., P^{p-1}]` built incrementally (one multiply per power).
     fn poly_powers(P: &LaurentPoly, p: u64) -> Vec<LaurentPoly> {
         let mut powers = Vec::with_capacity(p as usize);
@@ -812,6 +841,68 @@ mod tests {
         let Q = LaurentPoly::from_string("1 - x^2", 11);
         let dfao = DFAO::poly_auto(&P, &Q, 15);
         assert_eq!(dfao.unwrap_err(), "Number of states exceeded 15.");
+    }
+
+    #[test]
+    fn test_rz_machine_raw_reproduces_sequence() {
+        // The raw (un-minimized) RZ machine must compute the exact ct[P^n Q] values, and must be
+        // identical to poly_auto (it is a documented alias for the raw RZ construction).
+        let primes = vec![2, 3, 5, 7, 11, 13];
+        let mots: Vec<u64> = vec![
+            1, 1, 2, 4, 9, 21, 51, 127, 323, 835, 2188, 5798, 15511, 41835, 113634, 310572, 853467,
+            2356779, 6536382, 18199284, 50852019, 142547559, 400763223, 1129760415, 3192727797,
+        ];
+
+        for p in primes {
+            let P = LaurentPoly::from_string("x + 1 + x^-1", p);
+            let Q = LaurentPoly::from_string("1 - x^2", p);
+            let raw = DFAO::rz_machine(&P, &Q, 10000).unwrap();
+            for n in 0..mots.len() as u64 {
+                assert_eq!(raw.compute_ct(n), ModInt::new(mots[n as usize], p));
+            }
+            // rz_machine is the raw RZ construction == poly_auto (same states & transitions).
+            let pa = DFAO::poly_auto(&P, &Q, 10000).unwrap();
+            assert_eq!(
+                raw.serialize(p, |s| s.constant_term()),
+                pa.serialize(p, |s| s.constant_term()),
+                "rz_machine must equal poly_auto at p={p}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rz_machine_minimize_matches_standard() {
+        // raw + minimize == standard: minimizing the raw RZ machine must yield the same state
+        // count as the standard minimized lsd path (lin_rep_machine.minimize, which the census
+        // anchors at p=5 -> 10). lin_rep_machine and poly_auto are the same construction
+        // (serialization-identical, per test_lin_rep_machine), so the minimized counts agree.
+        let expected: [(u64, usize); 3] = [(3, 6), (5, 10), (7, 10)];
+        for (p, exp_min) in expected {
+            let P = LaurentPoly::from_string("x + 1 + x^-1", p);
+            let Q = LaurentPoly::from_string("1 - x^2", p);
+
+            let raw = DFAO::rz_machine(&P, &Q, 100000).unwrap();
+            let raw_min = raw.minimize(p, |s: &LaurentPoly| s.constant_term());
+            assert_eq!(
+                raw_min.states.len(),
+                exp_min,
+                "raw+minimize count at p={p}"
+            );
+
+            // The standard minimized path (lin_rep forward machine, then minimize) must agree.
+            let std = DFAO::lin_rep_machine(&P, &Q, 100000).unwrap();
+            let std_min = std.minimize(p, |s: &ModIntVector| s.constant_term());
+            assert_eq!(
+                raw_min.states.len(),
+                std_min.states.len(),
+                "raw+minimize != standard minimized count at p={p}"
+            );
+
+            // And the minimized raw machine still computes the sequence.
+            for n in 0..100u64 {
+                assert_eq!(raw_min.compute_ct(n), raw.compute_ct(n), "raw_min value at n={n}, p={p}");
+            }
+        }
     }
 
     #[test]
