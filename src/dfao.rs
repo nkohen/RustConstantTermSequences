@@ -598,6 +598,95 @@ impl DFAO<ModInt, ModIntVector> {
 }
 
 impl<S: Clone + Eq + Hash> DFAO<ModInt, S> {
+    /// Returns the minimal DFAO equivalent to `self` via Moore partition refinement
+    /// (the Myhill-Nerode quotient), using `output_func` to label states. The machine is
+    /// assumed to contain only reachable states; `from_reduction_rules` builds exactly that
+    /// (BFS over the reachable state space), so the constructors above satisfy the contract.
+    ///
+    /// The result keeps the same `DFAO<ModInt, S>` shape (one representative state per block,
+    /// `states[0]` still the initial state) so it can be serialized/composed like any other
+    /// machine. Two states are merged iff they have equal output and, recursively, equal
+    /// behavior on every digit (`O: Eq + Hash` is the output type that drives the partition).
+    pub fn minimize<F, O>(&self, modulus: u64, output_func: F) -> DFAO<ModInt, S>
+    where
+        F: Fn(&S) -> O,
+        O: Eq + Hash,
+    {
+        let n = self.states.len();
+        let p = modulus as usize;
+
+        // Flatten to next[s][digit] = target state index.
+        let index_of: HashMap<&S, usize> =
+            self.states.iter().enumerate().map(|(i, s)| (s, i)).collect();
+        let mut next = vec![vec![0usize; p]; n];
+        for (s, state) in self.states.iter().enumerate() {
+            for d in 0..p {
+                let to = self
+                    .transitions
+                    .get(&(state.clone(), ModInt::new(d as u64, modulus)))
+                    .expect("transition missing");
+                next[s][d] = *index_of.get(to).expect("transition target not in states");
+            }
+        }
+
+        // Initial partition: group states by output value.
+        let mut out_label: HashMap<O, u32> = HashMap::new();
+        let mut block = vec![0u32; n];
+        for s in 0..n {
+            let label = out_label.len() as u32;
+            block[s] = *out_label.entry(output_func(&self.states[s])).or_insert(label);
+        }
+
+        // Refine on (own block, blocks of successors) until the block count stabilizes.
+        loop {
+            let mut sig: HashMap<Vec<u32>, u32> = HashMap::new();
+            let mut new_block = vec![0u32; n];
+            for s in 0..n {
+                let mut key = Vec::with_capacity(1 + p);
+                key.push(block[s]);
+                for d in 0..p {
+                    key.push(block[next[s][d]]);
+                }
+                let label = sig.len() as u32;
+                new_block[s] = *sig.entry(key).or_insert(label);
+            }
+            let old_count = block.iter().collect::<std::collections::HashSet<_>>().len();
+            if sig.len() == old_count {
+                break;
+            }
+            block = new_block;
+        }
+
+        // Build the quotient: the lowest-indexed original state of each block is its
+        // representative, blocks are re-indexed in order of first appearance (so the block
+        // containing the original initial state stays at index 0).
+        let mut rep: Vec<usize> = Vec::new(); // new index -> representative original state
+        let mut new_index: HashMap<u32, usize> = HashMap::new();
+        for s in 0..n {
+            new_index.entry(block[s]).or_insert_with(|| {
+                rep.push(s);
+                rep.len() - 1
+            });
+        }
+
+        let new_states: Vec<S> = rep.iter().map(|&s| self.states[s].clone()).collect();
+        let mut new_transitions: HashMap<(S, ModInt), S> = HashMap::new();
+        for (new_i, &s) in rep.iter().enumerate() {
+            for d in 0..p {
+                let target_new = new_index[&block[next[s][d]]];
+                new_transitions.insert(
+                    (new_states[new_i].clone(), ModInt::new(d as u64, modulus)),
+                    new_states[target_new].clone(),
+                );
+            }
+        }
+
+        DFAO {
+            states: new_states,
+            transitions: new_transitions,
+        }
+    }
+
     pub fn serialize<F>(&self, p: u64, output_func: F) -> String
     where
         F: Fn(&S) -> ModInt,
@@ -848,6 +937,73 @@ mod tests {
             .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn test_minimize_parity_and_equivalence() {
+        // Motzkin ct[P^n (1-x^2)] mod p: minimized lsd / msd state counts must match the
+        // census known-answer anchor (p=5 -> 10 lsd / 40 msd). The lin_rep machines are the
+        // same construction the experiment driver minimizes, so this is a direct parity check.
+        let expected: [(u64, usize, usize); 3] = [(3, 6, 6), (5, 10, 40), (7, 10, 97)];
+        for (p, exp_lsd, exp_msd) in expected {
+            let pp = LaurentPoly::from_string("x + 1 + x^-1", p);
+            let qq = LaurentPoly::from_string("1 - x^2", p);
+
+            let fwd = DFAO::lin_rep_machine(&pp, &qq, 100000).unwrap();
+            let fmin = fwd.minimize(p, |s: &ModIntVector| s.constant_term());
+            assert_eq!(fmin.states.len(), exp_lsd, "lsd min count at p={p}");
+
+            let rev = DFAO::lin_rep_reverse_machine(&pp, &qq, 100000).unwrap();
+            let qv = ModIntVector::from_poly(&qq, rev.states[0].dim);
+            let rmin = rev.minimize(p, |s: &ModIntVector| s.dot(&qv));
+            assert_eq!(rmin.states.len(), exp_msd, "msd min count at p={p}");
+
+            // Equivalence: minimized lsd machine computes the same sequence as the original.
+            for n in 0..200u64 {
+                assert_eq!(
+                    fmin.compute_ct(n),
+                    fwd.compute_ct(n),
+                    "minimized lsd value mismatch at n={n}, p={p}"
+                );
+            }
+
+            // Idempotence: re-minimizing a minimal machine is a no-op (same count).
+            let fmin2 = fmin.minimize(p, |s: &ModIntVector| s.constant_term());
+            assert_eq!(fmin2.states.len(), fmin.states.len());
+        }
+    }
+
+    #[test]
+    fn test_minimize_collapses_duplicates() {
+        // Build a DFAO over ModInt states (output = the state value mod 2) with deliberately
+        // Nerode-equivalent states, and check the minimizer merges exactly them.
+        let p = 2u64;
+        // states 0 and 1 are equivalent: same output (both 0), and each sends every digit into
+        // {0,1}; state 2 has distinct output 1 and self-loops. Expect 3 -> 2. (State labels live
+        // under modulus 3 so the value-2 label stays distinct from value 0; the alphabet is p=2.)
+        let s = |v: u64| ModInt::new(v, 3);
+        let states = vec![s(0), s(1), s(2)];
+        let mut transitions: HashMap<(ModInt, ModInt), ModInt> = HashMap::new();
+        for d in 0..p {
+            transitions.insert((s(0), ModInt::new(d, p)), s(1));
+            transitions.insert((s(1), ModInt::new(d, p)), s(0));
+            transitions.insert((s(2), ModInt::new(d, p)), s(2));
+        }
+        let machine = DFAO { states, transitions };
+        // output: state 2 -> 1, states 0/1 -> 0
+        let mm = machine.minimize(p, |st: &ModInt| if st.value == 2 { 1u64 } else { 0u64 });
+        assert_eq!(mm.states.len(), 2, "equivalent states should collapse to 2");
+
+        // A machine whose states differ by output must NOT collapse.
+        let states2 = vec![s(0), s(1)];
+        let mut transitions2: HashMap<(ModInt, ModInt), ModInt> = HashMap::new();
+        for d in 0..p {
+            transitions2.insert((s(0), ModInt::new(d, p)), s(0));
+            transitions2.insert((s(1), ModInt::new(d, p)), s(1));
+        }
+        let machine2 = DFAO { states: states2, transitions: transitions2 };
+        let mm2 = machine2.minimize(p, |st: &ModInt| st.value);
+        assert_eq!(mm2.states.len(), 2, "distinct-output states must not merge");
     }
 
     #[test]
