@@ -109,7 +109,8 @@ impl LinRep {
     }
 
     // Basis of the span of `rows` over GF(p) by Gaussian elimination; its length is the rank.
-    fn row_basis(rows: &[Vec<u64>], dim: usize, p: u64) -> Vec<Vec<u64>> {
+    // Crate-visible so `minimization` reuses this single elimination routine (no second copy).
+    pub(crate) fn row_basis(rows: &[Vec<u64>], dim: usize, p: u64) -> Vec<Vec<u64>> {
         let mut basis: Vec<Vec<u64>> = Vec::new();
         let mut pivot_col: Vec<usize> = Vec::new();
         for r in rows {
@@ -139,7 +140,8 @@ impl LinRep {
     }
 
     // Rank of the matrix `m` over GF(p) by Gaussian elimination.
-    fn mat_rank(mut m: Vec<Vec<u64>>, p: u64) -> usize {
+    // Crate-visible so `minimization` reuses this single elimination routine (no second copy).
+    pub(crate) fn mat_rank(mut m: Vec<Vec<u64>>, p: u64) -> usize {
         let rows = m.len();
         if rows == 0 {
             return 0;
