@@ -430,4 +430,42 @@ mod tests {
         let (_dfao, incomplete) = mod_pk_kernel(&pp, &qq, p, k, 200, win).unwrap();
         assert!(incomplete, "tiny cap must surface incomplete=true");
     }
+
+    #[test]
+    fn mod_pk_values_matches_central_binomial() {
+        // Independent closed-form anchor for the exact value sweep (no automaton involved):
+        // for P = x + x^-1 and Q = 1, ct[P^n] = C(n, n/2), i.e. a(2m) = C(2m, m) and a(odd) = 0.
+        // C(2m,m) is accumulated in u128 so it never overflows for the n-range used; this checks
+        // mod_pk_values across several (p, k), including the non-field rings Z/p^k Z (k >= 2)
+        // whose whole point is that no Frobenius reduction is applied.
+        fn central_binomial(m: u64, modulus: u64) -> u64 {
+            // C(2m, m) via the exact integer recurrence C(2m,i+1) = C(2m,i)*(2m-i)/(i+1);
+            // each partial product is itself a binomial coefficient, so the division is exact.
+            let mut c: u128 = 1;
+            for i in 0..m {
+                c = c * ((2 * m - i) as u128) / ((i + 1) as u128);
+            }
+            (c % modulus as u128) as u64
+        }
+        let cap = 80usize; // 2m <= 80 keeps C(2m,m) well within u128
+        let cases: &[(u64, u32)] = &[(2, 2), (2, 3), (3, 2), (5, 1)];
+        for &(p, k) in cases {
+            let m = p.pow(k);
+            let a = mod_pk_values(&poly(&[(-1, 1), (1, 1)], m), &poly(&[(0, 1)], m), cap);
+            for n in 0..=cap {
+                let want = if n % 2 == 0 {
+                    central_binomial((n / 2) as u64, m)
+                } else {
+                    0
+                };
+                assert_eq!(a[n], want, "mod_pk_values mismatch at n={n}, p={p}, k={k}");
+            }
+            // Discriminating: the sweep is neither all-zero nor constant (a vacuous sweep of all
+            // 1s or all 0s would pass a weaker check but fails this one).
+            assert!(
+                a.iter().any(|&v| v != 0 && v != a[0]),
+                "sweep is suspiciously trivial at p={p}, k={k}"
+            );
+        }
+    }
 }

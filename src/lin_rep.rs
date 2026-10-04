@@ -299,4 +299,16 @@ mod tests {
             assert!(r <= rep.rank, "Hankel rank exceeds ambient at p={p}");
         }
     }
+
+    #[test]
+    fn hankel_rank_respects_bound() {
+        // The `bound` caps the reachable-state BFS in each direction: a too-small bound must
+        // return None (the guard fires) rather than a wrong number, while an ample bound returns
+        // the true rank. This discriminates the Option guard from the happy path -- an
+        // implementation that ignored `bound` would return Some(3) for both.
+        let (big, q) = motzkin(5);
+        let rep = LinRep::for_ct_sequence(&big, &q);
+        assert_eq!(rep.hankel_rank(1), None, "bound=1 must be exceeded -> None");
+        assert_eq!(rep.hankel_rank(100000), Some(3), "ample bound -> true rank 3");
+    }
 }

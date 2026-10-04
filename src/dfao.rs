@@ -1147,4 +1147,38 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn hankel_rank_is_bounded_by_minimized_state_counts() {
+        // Cross-check the two NEW minimal-dimension notions against each other on the Motzkin
+        // functional ct[P^n (1-x^2)]: the Hankel rank (minimal linear-representation dimension,
+        // lin_rep::hankel_rank) must be <= min(N_lsd, N_msd), the minimized forward/reverse DFAO
+        // state counts (dfao::minimize). Census anchors: (p, N_lsd, N_msd) with hankel == 3
+        // throughout -- so the Hankel rank is strictly below both minimized machines at p=5,7,
+        // confirming it is not merely re-reporting a DFAO state count.
+        let cases: [(u64, usize, usize); 3] = [(3, 6, 6), (5, 10, 40), (7, 10, 97)];
+        for (p, exp_lsd, exp_msd) in cases {
+            let pp = LaurentPoly::from_string("x + 1 + x^-1", p);
+            let qq = LaurentPoly::from_string("1 - x^2", p);
+
+            let lsd = DFAO::lin_rep_machine(&pp, &qq, 100000)
+                .unwrap()
+                .minimize(p, |s: &ModIntVector| s.constant_term())
+                .states
+                .len();
+            let rev = DFAO::lin_rep_reverse_machine(&pp, &qq, 100000).unwrap();
+            let qv = ModIntVector::from_poly(&qq, rev.states[0].dim);
+            let msd = rev.minimize(p, |s: &ModIntVector| s.dot(&qv)).states.len();
+
+            let h = LinRep::for_ct_sequence(&pp, &qq)
+                .hankel_rank(1_000_000)
+                .unwrap();
+
+            assert_eq!((lsd, msd, h), (exp_lsd, exp_msd, 3), "anchors mismatch at p={p}");
+            assert!(
+                h <= lsd.min(msd),
+                "hankel_rank {h} must be <= min(N_lsd {lsd}, N_msd {msd}) at p={p}"
+            );
+        }
+    }
 }

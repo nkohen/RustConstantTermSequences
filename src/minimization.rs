@@ -908,4 +908,62 @@ mod tests {
         // support seeds: for a trinomial with full support there may be none; just ensure it runs.
         let _ = seeds_support(&p_poly, p, 3);
     }
+
+    // ---- the minimized rep must COMPUTE the sequence, not merely have the right dimension. ----
+    #[test]
+    fn minimal_dual_rep_reproduces_sequence() {
+        // Evaluate (v', {M_d'}, w') as a forward lsd row machine -- state u starts at v', reads n
+        // least-significant digit first with u |-> u * M_d' (row times matrix), output u . w' --
+        // and compare to the ambient LinRep on a range of n. A wrong quotient (e.g. collapsing
+        // non-equivalent cosets) would still have a plausible `dim` but break the values here.
+        // Covers non-symmetric P (Q=1) and symmetric Motzkin P with Q = 1 - x^2.
+        fn eval(rep: &MinimizedRep, n: u64) -> u64 {
+            let p = rep.modulus;
+            let mut state = rep.row_vec.clone();
+            let mut nn = n;
+            let mut digits = Vec::new();
+            while nn > 0 {
+                digits.push((nn % p) as usize);
+                nn /= p;
+            }
+            for d in digits {
+                // lsd first
+                let mat = &rep.mat_func[d];
+                let mut ns = vec![0u64; rep.dim];
+                for j in 0..rep.dim {
+                    let mut acc = 0u64;
+                    for i in 0..rep.dim {
+                        acc += state[i] * mat[i][j] % p;
+                    }
+                    ns[j] = acc % p;
+                }
+                state = ns;
+            }
+            let mut acc = 0u64;
+            for i in 0..rep.dim {
+                acc += state[i] * rep.col_vec[i] % p;
+            }
+            acc % p
+        }
+
+        // (P-terms, Q-terms, p)
+        let cases: &[(&[(i64, i64)], &[(i64, i64)], u64)] = &[
+            (&[(-1, 1), (0, 1), (2, 1)], &[(0, 1)], 7), // non-symmetric, Q=1
+            (&[(-1, 1), (2, 1)], &[(0, 1)], 5),         // non-symmetric, Q=1
+            (&[(-1, 1), (0, 1), (1, 1)], &[(0, 1), (2, -1)], 5), // Motzkin P (palindromic), Q=1-x^2
+        ];
+        for &(pt, qt, p) in cases {
+            let pp = poly(pt, p);
+            let qq = poly(qt, p);
+            let (_k, rep) = minimal_dual(&pp, &qq, p, None, None, 1000).unwrap();
+            let ambient = LinRep::for_ct_sequence(&pp, &qq);
+            for n in 0..120u64 {
+                assert_eq!(
+                    eval(&rep, n),
+                    ambient.compute(n).value,
+                    "minimal_dual rep value mismatch at n={n}, p={p}, P={pt:?}"
+                );
+            }
+        }
+    }
 }
